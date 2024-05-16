@@ -23,7 +23,7 @@ pub const Item = struct {
 };
 
 pub const Node = struct {
-    tx: *transaction.TX,
+    tx: ?*transaction.TX,
     pageNum: u64,
 
     items: std.ArrayList(*Item),
@@ -38,6 +38,7 @@ pub const Node = struct {
         self.allocator = allocator;
         self.children = std.ArrayList(u64).init(allocator);
         self.items = std.ArrayList(*Item).init(allocator);
+        self.tx = null;
     }
 
     pub fn destroy(self: *Self) void {
@@ -59,5 +60,11 @@ pub const Node = struct {
 
     pub fn isFirst(index: usize) bool {
         return (index == 0);
+    }
+
+    fn writeNode(self: *Self, nodes: []*Node) void {
+        for (nodes) |node| {
+            self.tx.?.writeNode(node);
+        }
     }
 };
