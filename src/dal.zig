@@ -20,7 +20,7 @@ const Page = struct {
 };
 
 pub const Dal = struct {
-    pageSize usize,
+    pageSize: usize,
     minFillPercent: f32,
     maxFillPercent: f32,
     file: *std.fs.File,
@@ -29,10 +29,10 @@ pub const Dal = struct {
     allocator: std.mem.Allocator,
 
     const Self = @This();
-    pub fn init(allocator: std.mem.Allocator, path: []const u8, options: Options) !Self {
-        var dal: Dal = undefined;
+    pub fn init(allocator: std.mem.Allocator, path: []const u8, options: Options) !*Self {
+        var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
-
+        dal.allocator = allocator;
         return dal;
     }
 };
