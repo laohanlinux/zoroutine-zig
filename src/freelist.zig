@@ -47,6 +47,7 @@ pub const FreeList = struct {
         self.releasedPages.append(page) catch unreachable;
     }
 
+    /// serialize serializes the freelist to a buffer.
     pub fn serialize(self: *Self, buf: []u8) void {
         var pos: usize = 0;
         std.mem.writeInt(u16, buf[0..(pos + 2)], @as(u16, @intCast(self.maxPage)), std.builtin.Endian.big);
@@ -63,15 +64,18 @@ pub const FreeList = struct {
         return;
     }
 
+    /// deserialize deserializes the freelist from a buffer.
     pub fn deserialize(self: *Self, buf: []u8) void {
         var pos: usize = 0;
         const _maxPage = std.mem.readInt(u16, buf[pos..(pos + 2)], std.builtin.Endian.big);
         self.maxPage = @as(u16, _maxPage);
         pos += 2;
 
+        // released pages count
         const releasePageCount = std.mem.readInt(u16, buf[pos..(pos + 2)], std.builtin.Endian.big);
         pos += 2;
 
+        // released pages
         while (releasePageCount > 0) : (releasePageCount -= 1) {
             self.releasedPages.append(std.mem.readInt(u64, buf[pos..(pos + 8)], std.builtin.Endian.big)) catch unreachable;
             pos += 8;

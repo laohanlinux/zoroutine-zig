@@ -1,6 +1,7 @@
 const std = @import("std");
 const Meta = @import("./meta.zig").Meta;
 const FreeList = @import("./freelist.zig").FreeList;
+const Node = @import("./node.zig").Node;
 
 pub const Options = struct {
     pageSize: usize,
@@ -15,15 +16,28 @@ pub const DefaultOptions = Options{
 };
 
 const Page = struct {
-    num: u64,
+    num: u64, // page id
     data: []u8,
+
+    pub fn init(allocator: std.mem.Allocator, dataSize: usize) !*Page {
+        const page = try allocator.create(Page);
+        page.*.num = 0;
+        page.*.data = try allocator.alloc(u8, dataSize);
+        @memset(page.data, 0);
+        return page;
+    }
+
+    pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+        allocator.destroy(self);
+    }
 };
 
 pub const Dal = struct {
     pageSize: usize,
     minFillPercent: f32,
     maxFillPercent: f32,
-    file: *std.fs.File,
+    file: std.fs.File,
     meta: *Meta,
     freelist: *FreeList,
     allocator: std.mem.Allocator,
@@ -33,6 +47,95 @@ pub const Dal = struct {
         var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
         dal.allocator = allocator;
+        _ = std.fs.cwd().statFile(path) catch |err| {
+            switch (err) {
+                std.fs.File.OpenError.FileNotFound => {
+                    // _ = std.fs.cwd().createFile(path, .{ .read = true }) catch unreachable;
+                    dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .read = true });
+                    dal.meta = try allocator.create(Meta);
+                    dal.freelist = try allocator.create(FreeList);
+                    dal.meta.freeListPage = dal.freelist.getNextPage();
+                    try dal.writeFreelist();
+                    // return dal;
+                },
+                else => {
+                    // return err;
+                },
+            }
+        };
+        // catch | (std.fs.cwd().statFile(path))| {
+        //
+        // }
+
         return dal;
     }
+
+    pub fn deinit(self: *Self) void {
+        self.file.close();
+        self.allocator.destroy(self.meta);
+        self.allocator.destroy(self.freelist);
+        self.allocator.destroy(self);
+    }
+
+    fn writeNode(self: *Self, node: *Node) !void {
+        const page = try self.allocateEmptyPage();
+        if (node.*.pageNum == 0) { // TODO Why
+            page.*.num = self.freelist.getNextPage();
+            node.*.pageNum = page.*.num;
+        } else {
+            page.*.num = node.*.pageNum;
+        }
+
+        node.serialize(page.data);
+    }
+
+    fn writeFreelist(self: *Self) !*Page {
+        const page = try self.allocateEmptyPage();
+        page.*.num = self.meta.*.freeListPage;
+        self.freelist.serialize(page.data);
+        try self.writePage(page);
+    }
+
+    fn writePage(self: *Self, page: *Page) !void {
+        const offset: u64 = page.*.num * @as(u64, self.pageSize);
+        try self.file.pwriteAll(page.data, offset);
+    }
+
+    fn allocateEmptyPage(self: *Self) !*Page {
+        const page = try Page.init(self.allocator, self.pageSize);
+        return page;
+    }
 };
+
+test "dal" {
+    const fileName = generateTmpFile("dirty_file");
+    var dal = try Dal.init(std.testing.allocator, fileName, DefaultOptions);
+    defer dal.deinit();
+    std.debug.print("{any}\n", .{dal});
+}
+
+fn generateTmpFile(suffix: []const u8) []const u8 {
+    const tmpDir = std.testing.tmpDir(.{});
+    // std.log.info("{s}", tmpDir.dir.metadata());
+    const relativePath = std.fs.path.join(std.heap.page_allocator, &.{ "zig-cache", "tmp", tmpDir.sub_path[0..] }) catch unreachable;
+    defer std.heap.page_allocator.free(relativePath);
+    const baseDir = std.fs.realpathAlloc(std.heap.page_allocator, relativePath) catch unreachable;
+    defer std.heap.page_allocator.free(baseDir);
+    _ = std.fs.cwd().makeDir(baseDir) catch {};
+    const fileName = fprint(std.heap.page_allocator, "{any}{s}", .{ std.time.nanoTimestamp(), suffix });
+    defer std.heap.page_allocator.free(fileName);
+
+    const paths = &[_][]const u8{
+        baseDir,
+        fileName,
+    };
+    const fullFileName = std.fs.path.join(std.heap.page_allocator, paths) catch unreachable;
+    // _ = std.fs.cwd().createFile(fullFileName, .{ .read = true }) catch unreachable;
+    std.log.info("the badger path: {s}", .{fullFileName});
+    return fullFileName;
+}
+
+pub fn fprint(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) []const u8 {
+    const buffer = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
+    return buffer;
+}
