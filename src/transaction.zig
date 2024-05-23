@@ -39,6 +39,8 @@ pub const TX = struct {
         }
     }
 
+    // Write the node with tx, so tx also owns the node
+    // This is used to write the node to the db
     pub fn writeNode(self: *Self, node: *Node) *Node {
         self.dirtyNodes.put(node.pageNum, node) catch unreachable;
         node.tx = self;
