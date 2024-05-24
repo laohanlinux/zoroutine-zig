@@ -32,8 +32,9 @@ pub const Node = struct {
     allocator: std.mem.Allocator,
 
     const Self = @This();
-    const nodeHeaderSize: usize = 3;
+    pub const nodeHeaderSize: usize = 3;
 
+    // new a empty node with allocator
     pub fn init(allocator: std.mem.Allocator) *Self {
         var self: *Self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;
@@ -79,13 +80,18 @@ pub const Node = struct {
         return self.tx.?.getNode(pageNum);
     }
 
-    /// isOverPopulated checks if the node size is bigger than the size of a page.
+    // checks if the node size is big enough to populate a page after giving away one item.
+    fn canSpareAnElement(self: *const Self) bool {
+        return self.tx.?.db.dal.getSplitIndex(self) != null;
+    }
+
+    // isOverPopulated checks if the node size is bigger than the size of a page.
     fn isOverPopulated(self: *const Self) bool {
-        const splitIndex = self.tx.?.db.getSplitIndex(self);
-        if (splitIndex == -1) {
-            return false;
-        }
-        return true;
+        return self.tx.?.db.dal.isOverPopulated(self);
+    }
+
+    fn isUnderPopulated(self: *const Self) bool {
+        return self.tx.?.db.dal.isUnderPopulated(self);
     }
 
     fn serialize(self: *const Self, buf: []u8) void {
@@ -205,7 +211,7 @@ pub const Node = struct {
     }
 
     /// Returns the node's size in bytes.
-    fn nodeSize(self: *const Self) usize {
+    pub fn nodeSize(self: *const Self) usize {
         var size = 0;
         size += Self.nodeHeaderSize;
         for (0..self.items.len) |i| {
@@ -234,6 +240,153 @@ pub const Node = struct {
         return insertionIndex;
     }
 
+    // split rebalances the tree after adding. After insertion the modified node has to be checked to make sure it
+    // didn't exceed the maximum number of elements. If it did, then it has to be split and rebalanced. The transformation
+    // is depicted in the graph below. If it's not a leaf node, then the children has to be moved as well as shown.
+    // This may leave the parent unbalanced by having too many items so rebalancing has to be checked for all the ancestors.
+    // The split is performed in a for loop to support splitting a node more than once. (Though in practice used only once).
+    // 	           n                                        n
+    //                 3                                       3,6
+    //	      /        \           ------>       /          |          \
+    //	   a           modifiedNode            a       modifiedNode     newNode
+    //   1,2                 4,5,6,7,8            1,2          4,5         7,8
+    fn split(self: *Self, nodeToSplit: *Node, nodeToSplitIndex: usize) !void {
+        // The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
+        // index after.
+        const splitIndex = try nodeToSplit.tx.?.db.dal.getSplitIndex(nodeToSplit);
+        const middItem = nodeToSplit.items.items[splitIndex];
+        var newNode: *Node = null;
+        if (nodeToSplit.isLeaf()) {
+            // newNode = self.writeNode(self.tx.?.newNode(node));
+        }
+    }
+
+    // rebalanceRemove rebalances the tree after a remove operation. This can be either by rotating to the right, to the
+    // left or by merging. First, the sibling nodes are checked to see if they have enough items for rebalancing
+    // (>= minItems+1). If they don't have enough items, then merging with one of the sibling nodes occurs. This may leave
+    // the parent unbalanced by having too little items so rebalancing has to be checked for all the ancestors.
+    fn rebalanceRemove(self: *Self, unbalanceNode: *Node, unbalanceIndex: usize) !void {
+        const pNode = self;
+        // Right rotate
+        if (unbalanceIndex != 0) {
+            const leftNode = try self.getNode(pNode.childNodes.items[unbalanceIndex - 1]);
+            if (leftNode.canSpareAnElement()) {
+                Self.rotateRight(leftNode, pNode, unbalanceNode, unbalanceIndex);
+                self.writeNodes([]*Node{ leftNode, pNode, unbalanceNode });
+                return;
+            }
+        }
+
+        // Left rotate
+        if (unbalanceIndex != (pNode.items.len - 1)) {
+            const rightNode = try self.getNode(pNode.childNodes.items[unbalanceIndex + 1]);
+            if (rightNode.canSpareAnElement()) {
+                Self.rotateLeft(unbalanceNode, pNode, rightNode, unbalanceIndex);
+                self.writeNodes([]*Node{ unbalanceNode, pNode, rightNode });
+                return;
+            }
+        }
+
+        // The merge function merges a given node with its node to the right. So by default, we merge an unbalanced node
+        // with its right sibling. In the case where the unbalanced node is the leftmost, we have to replace the merge
+        // parameters, so the unbalanced node right sibling, will be merged into the unbalanced node.
+        if (unbalanceIndex == 0) {
+            const rightNode = try self.getNode(pNode.childNodes.items[unbalanceIndex + 1]);
+            return Self.merge(rightNode, unbalanceIndex + 1);
+        }
+
+        return pNode.merge(unbalanceNode, unbalanceIndex);
+    }
+
+    // Removes an item from a leaf node. it means there is no handling of child nodes.
+    fn removeItemFromLeaf(self: *Self, index: usize) void {
+        // TODO maybe need to free it
+        const _ = self.items.orderedRemove(index);
+        self.writeNode(self);
+    }
+
+    fn removeItemFromInternal(self: *Self, index: usize) ![]usize {
+        // Take element before inorder (The biggest element from the left branch), put it in the removed index and remove
+        // it from the original node. Track in affectedNodes any nodes in the path leading to that node. It will be used
+        // in case the tree needs to be rebalanced.
+        //          p
+        //       /
+        //     ..
+        //  /     \
+        // ..      a
+        const affectedNodes = std.ArrayList(usize).init(self.allocator);
+        try affectedNodes.append(index);
+
+        // Starting from its left child, descend to the rightmost descendant.
+        var aNode = try self.getNode(self.childNodes.items[index]);
+        while (!aNode.isLeaf()) {
+            const travesingIndex = self.childNodes.items.len - 1;
+            aNode = try aNode.getNode(aNode.childNodes.items[travesingIndex]);
+            try affectedNodes.append(travesingIndex);
+        }
+
+        // Replace the item that should be removed with the item before inorder which we just found.
+        self.items.items[index] = aNode.items.getLast();
+        self.writeNode(self);
+        self.writeNode(aNode);
+
+        const _affectedNodes = try affectedNodes.toOwnedSlice();
+        return _affectedNodes;
+    }
+
+    fn rotateRight(aNode: *Node, pNode: *Node, bNode: *Node, bNodeIndex: usize) void {
+        // 	           p                                    p
+        //             4                                    3
+        //	      /        \           ------>         /          \
+        //	   a           b (unbalanced)            a        b (unbalanced)
+        //      1,2,3             5                     1,2            4,5
+
+        // Get last item and remove it
+        const aNodeItem = aNode.items.pop();
+
+        // Get item from parent node and assign the aNodeItem item instead
+        const pNodeItemIndex: usize = if (Self.isFirst(bNodeIndex)) 0 else bNodeIndex;
+        const pNodeItem = pNode.items.items[pNodeItemIndex];
+        pNode.items.items[pNodeItemIndex] = aNodeItem;
+
+        // Assign parent item to b and make it first
+        bNode.items.insert(0, pNodeItem) catch unreachable;
+
+        // If it's an inner leaf then move children as well.
+        if (!aNode.isLeaf()) {
+            const childNodeToShift = aNode.childNodes.pop();
+            bNode.childNodes.insert(0, childNodeToShift);
+        }
+    }
+
+    fn rotateLeft(aNode: *Node, pNode: *Node, bNode: *Node, bNodeIndex: usize) void {
+        // 	           p                                     p
+        //             2                                     3
+        //	      /        \           ------>         /          \
+        //  a(unbalanced)       b                 a(unbalanced)        b
+        //   1                3,4,5                   1,2             4,5
+
+        // Get first item and remove it
+        const bNodeItem = bNode.items.orderedRemove(0);
+
+        // Get item from parent node and assign the bNodeItem item instead
+        const pNodeItemIndex: usize = bNodeIndex;
+        if (Self.isLast(pNode, bNodeIndex)) {
+            // Why need to check if it's the last item
+            pNodeItemIndex = pNode.items.items.len - 1;
+        }
+        const pNodeItem = pNode.items.items[pNodeItemIndex];
+        pNode.items.items[pNodeItemIndex] = bNodeItem;
+        // Assign parent item to a and make it last
+        aNode.items.append(pNodeItem) catch unreachable;
+
+        // If it's an inner leaf then move children as well.
+        if (!bNode.isLeaf()) {
+            const childNodeToShift = bNode.childNodes.orderedRemove(0);
+            aNode.childNodes.append(childNodeToShift) catch unreachable;
+        }
+    }
+
     fn merge(self: *Self, bNode: *Node, bNodeIndex: usize) !void {
         // 	               p                                     p
         //                3,5                                    5
@@ -244,6 +397,19 @@ pub const Node = struct {
         const aNode = try self.getNode(self.childNodes.items[bNodeIndex - 1]);
 
         // Take the item from the parent, remove it and add it to the unbalanced node
+        const pNodeItem = self.items.items[bNodeIndex - 1];
+        _ = self.items.orderedRemove(bNodeIndex);
 
+        try aNode.items.append(pNodeItem);
+        _ = self.childNodes.orderedRemove(bNodeIndex);
+
+        if (!aNode.isLeaf()) {
+            try aNode.childNodes.appendSlice(bNode.childNodes.items);
+        }
+
+        self.writeNode(aNode);
+        self.writeNode(self);
+
+        self.tx.?.deleteNode(bNode);
     }
 };

@@ -77,6 +77,39 @@ pub const Dal = struct {
         self.allocator.destroy(self);
     }
 
+    // Should be called when performing rebalance after an item is removed. It checks if a node can spare an
+    // element, and if it does then it returns the index when there the split should happen. Otherwise -1 is returned.
+    pub fn getSplitIndex(self: *const Self, node: *const Node) ?usize {
+        var size: usize = 0;
+        size += Node.nodeHeaderSize;
+        for (node.items.items, 0..) |_, i| {
+            size += node.elementSize(i);
+            // if we have a big enough page size (more than minimum), and didn't reach the last node, which means we can
+            // spare an element
+            if (@as(f32, @intCast(size)) > self.maxThreshold() and i < node.items.items.len - 1) {
+                return i + 1; // NOTE: return the next index
+            }
+        }
+
+        return null;
+    }
+
+    pub fn isOverPopulated(self: *const Self, node: *const Node) bool {
+        return @as(f32, @intCast(node.nodeSize())) > self.maxThreshold();
+    }
+
+    pub fn maxThreshold(self: *const Self) f32 {
+        return self.maxFillPercent * @as(f32, @intCast(self.pageSize));
+    }
+
+    pub fn minThreshold(self: *const Self) f32 {
+        return self.minFillPercent * @as(f32, @intCast(self.pageSize));
+    }
+
+    pub fn isUnderPopulated(self: *Self) bool {
+        return self.freelist.isUnderPopulated();
+    }
+
     fn writeNode(self: *Self, node: *Node) !void {
         const page = try self.allocateEmptyPage();
         if (node.*.pageNum == 0) { // TODO Why

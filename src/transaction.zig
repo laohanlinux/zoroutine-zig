@@ -1,5 +1,6 @@
 const std = @import("std");
 const Node = @import("./node.zig").Node;
+const Item = @import("./node.zig").Item;
 const DB = @import("./db.zig").DB;
 
 pub const TX = struct {
@@ -32,6 +33,16 @@ pub const TX = struct {
         self.allocator.destroy(self);
     }
 
+    pub fn newNode(self: *Self, items: std.ArrayList(*Item), childNodes: []u64) *Node {
+        const node = Node.init(self.allocator);
+        node.items.appendSlice(items.items) catch unreachable;
+        node.childNodes.appendSlice(childNodes) catch unreachable;
+        node.pageNum = self.db.dal.freelist.getNextPage();
+        node.tx = self;
+        node.tx.?.allocatedPageNums.append(node.pageNum) catch unreachable;
+        return node;
+    }
+
     pub fn getNode(self: *Self, pageNum: u64) !*Node {
         // Why
         if (self.dirtyNodes.get(pageNum)) |node| {
@@ -45,5 +56,10 @@ pub const TX = struct {
         self.dirtyNodes.put(node.pageNum, node) catch unreachable;
         node.tx = self;
         return node;
+    }
+
+    // Delete the node with tx, so tx also owns the node
+    pub fn deleteNode(self: *Self, node: *Node) void {
+        self.pagesToDelete.append(node) catch unreachable;
     }
 };
