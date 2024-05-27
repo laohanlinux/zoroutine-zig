@@ -10,6 +10,8 @@ pub const Meta = struct {
     allocator: std.mem.Allocator,
     const Self = @This();
 
+    pub const pageMetaNum: u64 = 0;
+
     pub fn init(allocator: std.mem.Allocator) *Self {
         var self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;

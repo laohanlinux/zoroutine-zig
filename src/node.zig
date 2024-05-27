@@ -40,7 +40,19 @@ pub const Node = struct {
         self.allocator = allocator;
         self.childNodes = std.ArrayList(u64).init(allocator);
         self.items = std.ArrayList(*Item).init(allocator);
+        self.pageNum = 0;
         self.tx = null;
+    }
+
+
+    /// creates a new node only with the properties that are relevant when savuing to the disk
+    pub fn initNodeForSerialization(allocator: std.mem.Allocator, _items: std.ArrayList(*Item), _childNodes: std.ArrayList(u64)) *Self {
+        var self: *Self = allocator.create(Self) catch unreachable;
+        self.allocator = allocator;
+        self.childNodes = _childNodes;
+        self.items = _items;
+        self.tx = null;
+        return self;
     }
 
     pub fn destroy(self: *Self) void {
@@ -158,7 +170,7 @@ pub const Node = struct {
         }
     }
 
-    fn deserialize(self: *const Self, buf: []u8) void {
+    pub fn deserialize(self: *const Self, buf: []u8) void {
         var leftPos = 0;
         // Read header
         const _isLeaf = buf[leftPos] == 1;

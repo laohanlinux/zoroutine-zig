@@ -47,25 +47,32 @@ pub const Dal = struct {
         var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
         dal.allocator = allocator;
-        _ = std.fs.cwd().statFile(path) catch |err| {
+        const stat = std.fs.cwd().statFile(path) catch |err| {
             switch (err) {
                 std.fs.File.OpenError.FileNotFound => {
-                    dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .read = true });
+                    dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .exclusive = true });
                     dal.meta = try allocator.create(Meta);
                     dal.freelist = try allocator.create(FreeList);
                     dal.meta.freeListPage = dal.freelist.getNextPage();
                     try dal.writeFreelist();
-                    // return dal;
+
+                    // init root
+                    const collectionsMode = try dal.writeNode(try Node.init(allocator));
+                    dal.root = collectionsMode.pageNum;
+
+                    // Write meta page.
+                    _ = try dal.writeNode(dal.meta); // other error
+                    return dal;
                 },
                 else => {
-                    // return err;
+                    return err;
                 },
             }
         };
-        // catch | (std.fs.cwd().statFile(path))| {
-        //
-        // }
-
+        std.log.info("the db has exist, fileSize: {d}", .{stat.size});
+        dal.file = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{ .mode = .read_write });
+        dal.meta = try dal.readMeta();
+        dal.freelist = try dal.readFreelist();
         return dal;
     }
 
@@ -109,6 +116,14 @@ pub const Dal = struct {
         return self.freelist.isUnderPopulated();
     }
 
+    fn getNode(self: *Self, pageNum: u64) !*Node {
+        const page = try self.readPage(pageNum);
+        var node = Node.init(self.allocator);
+        node.deserialize(page.data);
+        node.*.pageNum = pageNum;
+        return node;
+    }
+
     fn writeNode(self: *Self, node: *Node) !void {
         const page = try self.allocateEmptyPage();
         if (node.*.pageNum == 0) { // TODO Why
@@ -121,11 +136,45 @@ pub const Dal = struct {
         node.serialize(page.data);
     }
 
+    fn deleteNode(self: *Self, pageNum: u64) void {
+        self.freelist.releasePage(pageNum);
+    }
+
+    fn readFreelist(self: *Self) !*FreeList {
+        const page = try self.readPage(self.meta.freeListPage);
+        var freelist = FreeList.init(self.allocator);
+        freelist.deserialize(page.data);
+        return freelist;
+    }
+
     fn writeFreelist(self: *Self) !*Page {
         const page = try self.allocateEmptyPage();
         page.*.num = self.meta.*.freeListPage;
         self.freelist.serialize(page.data);
         try self.writePage(page);
+        return page;
+    }
+
+    fn writeMeta(self: *Self, meta: *Meta) !*Page {
+        const page = try self.allocateEmptyPage();
+        page.*.num = Meta.pageMetaNum;
+        meta.serialize(page.data);
+        try self.writePage(page);
+        return page;
+    }
+
+    fn readMeta(self: *Self) !*Meta {
+        const page = try self.readPage(Meta.pageMetaNum);
+        const meta = Meta.init(self.allocator);
+        meta.deserialize(page.data);
+        return meta;
+    }
+
+    fn readPage(self: *Self, pageNum: u64) !*Page {
+        const page = try self.allocateEmptyPage();
+        const offset: usize = pageNum * @as(u64, self.pageSize);
+        _ = try self.file.pread(page.data, offset);
+        return page;
     }
 
     fn writePage(self: *Self, page: *Page) !void {
