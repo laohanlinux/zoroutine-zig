@@ -50,7 +50,6 @@ pub const Dal = struct {
         _ = std.fs.cwd().statFile(path) catch |err| {
             switch (err) {
                 std.fs.File.OpenError.FileNotFound => {
-                    // _ = std.fs.cwd().createFile(path, .{ .read = true }) catch unreachable;
                     dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .read = true });
                     dal.meta = try allocator.create(Meta);
                     dal.freelist = try allocator.create(FreeList);

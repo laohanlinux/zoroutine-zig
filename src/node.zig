@@ -301,7 +301,7 @@ pub const Node = struct {
     // Removes an item from a leaf node. it means there is no handling of child nodes.
     fn removeItemFromLeaf(self: *Self, index: usize) void {
         // TODO maybe need to free it
-        const _ = self.items.orderedRemove(index);
+        _ = self.items.orderedRemove(index);
         self.writeNode(self);
     }
 
