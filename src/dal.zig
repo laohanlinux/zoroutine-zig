@@ -84,7 +84,7 @@ pub const Dal = struct {
     }
 
     // Should be called when performing rebalance after an item is removed. It checks if a node can spare an
-    // element, and if it does then it returns the index when there the split should happen. Otherwise -1 is returned.
+    // element, and if it does then it returns the index when there the split should happen. Otherwise None is returned.
     pub fn getSplitIndex(self: *const Self, node: *const Node) ?usize {
         var size: usize = 0;
         size += Node.nodeHeaderSize;
@@ -100,14 +100,16 @@ pub const Dal = struct {
         return null;
     }
 
-    pub fn isOverPopulated(self: *const Self, node: *const Node) bool {
-        return @as(f32, @intCast(node.nodeSize())) > self.maxThreshold();
-    }
-
+    // For split
     pub fn maxThreshold(self: *const Self) f32 {
         return self.maxFillPercent * @as(f32, @intCast(self.pageSize));
     }
 
+    pub fn isOverPopulated(self: *const Self, node: *const Node) bool {
+        return @as(f32, @intCast(node.nodeSize())) > self.maxThreshold();
+    }
+
+    // For merge
     pub fn minThreshold(self: *const Self) f32 {
         return self.minFillPercent * @as(f32, @intCast(self.pageSize));
     }
@@ -116,12 +118,23 @@ pub const Dal = struct {
         return self.freelist.isUnderPopulated();
     }
 
-    fn getNode(self: *Self, pageNum: u64) !*Node {
-        const page = try self.readPage(pageNum);
-        var node = Node.init(self.allocator);
-        node.deserialize(page.data);
-        node.*.pageNum = pageNum;
-        return node;
+    fn allocateEmptyPage(self: *Self) !*Page {
+        const page = try Page.init(self.allocator, self.pageSize);
+        return page;
+    }
+
+    // read a page from disk file.
+    fn readPage(self: *Self, pageNum: u64) !*Page {
+        const page = try self.allocateEmptyPage();
+        const offset: usize = pageNum * @as(u64, self.pageSize);
+        _ = try self.file.pread(page.data, offset);
+        return page;
+    }
+
+    // write a page to disk file
+    fn writePage(self: *Self, page: *Page) !void {
+        const offset: u64 = page.*.num * @as(u64, self.pageSize);
+        try self.file.pwriteAll(page.data, offset);
     }
 
     fn writeNode(self: *Self, node: *Node) !void {
@@ -134,6 +147,14 @@ pub const Dal = struct {
         }
 
         node.serialize(page.data);
+    }
+
+    fn getNode(self: *Self, pageNum: u64) !*Node {
+        const page = try self.readPage(pageNum);
+        var node = Node.init(self.allocator);
+        node.deserialize(page.data);
+        node.*.pageNum = pageNum;
+        return node;
     }
 
     fn deleteNode(self: *Self, pageNum: u64) void {
@@ -168,23 +189,6 @@ pub const Dal = struct {
         const meta = Meta.init(self.allocator);
         meta.deserialize(page.data);
         return meta;
-    }
-
-    fn readPage(self: *Self, pageNum: u64) !*Page {
-        const page = try self.allocateEmptyPage();
-        const offset: usize = pageNum * @as(u64, self.pageSize);
-        _ = try self.file.pread(page.data, offset);
-        return page;
-    }
-
-    fn writePage(self: *Self, page: *Page) !void {
-        const offset: u64 = page.*.num * @as(u64, self.pageSize);
-        try self.file.pwriteAll(page.data, offset);
-    }
-
-    fn allocateEmptyPage(self: *Self) !*Page {
-        const page = try Page.init(self.allocator, self.pageSize);
-        return page;
     }
 };
 
