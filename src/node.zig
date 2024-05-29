@@ -23,14 +23,14 @@ pub const Item = struct {
 };
 
 pub const Node = struct {
-    tx: ?*transaction.TX,
-    pageNum: u64,
+    // associated transaction
+    tx: *transaction.TX,
 
+    pageNum: u64,
     items: std.ArrayList(*Item),
     childNodes: std.ArrayList(u64),
 
-    allocator: std.mem.Allocator,
-
+    allocator: ?std.mem.Allocator,
     const Self = @This();
     pub const nodeHeaderSize: usize = 3;
 
@@ -44,13 +44,13 @@ pub const Node = struct {
         self.tx = null;
     }
 
-
     /// creates a new node only with the properties that are relevant when savuing to the disk
     pub fn initNodeForSerialization(allocator: std.mem.Allocator, _items: std.ArrayList(*Item), _childNodes: std.ArrayList(u64)) *Self {
         var self: *Self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;
         self.childNodes = _childNodes;
         self.items = _items;
+        self.pageNum = 0;
         self.tx = null;
         return self;
     }
@@ -61,7 +61,9 @@ pub const Node = struct {
         }
         self.items.deinit();
         self.childNodes.deinit();
-        self.allocator.destroy(self);
+        if (self.allocator) |allocator| {
+            allocator.destroy(self);
+        }
     }
 
     pub fn isLeaf(self: *const Self) bool {
@@ -78,32 +80,33 @@ pub const Node = struct {
 
     // Related to transaction with node
     fn writeNode(self: *Self, node: *Node) void {
-        return self.tx.?.writeNode(node);
+        _ = self.tx.writeNode(node);
     }
 
     fn writeNodes(self: *Self, nodes: []*Node) void {
         for (nodes) |node| {
-            self.tx.?.writeNode(node);
+            _ = self.tx.writeNode(node);
         }
     }
 
     /// Get pageNum's node from the transaction
     fn getNode(self: *Self, pageNum: u64) !*Node {
-        return self.tx.?.getNode(pageNum);
+        return self.tx.getNode(pageNum);
+    }
+
+    /// Checks if the node size is bigger than the size of a page.
+    fn isOverPopulated(self: *const Self) bool {
+        return self.tx.db.dal.isOverPopulated(self);
     }
 
     // checks if the node size is big enough to populate a page after giving away one item.
     fn canSpareAnElement(self: *const Self) bool {
-        return self.tx.?.db.dal.getSplitIndex(self) != null;
+        return self.tx.db.dal.getSplitIndex(self) != null;
     }
 
-    // isOverPopulated checks if the node size is bigger than the size of a page.
-    fn isOverPopulated(self: *const Self) bool {
-        return self.tx.?.db.dal.isOverPopulated(self);
-    }
-
+    // Checks if the node size is smaller than the size of page.
     fn isUnderPopulated(self: *const Self) bool {
-        return self.tx.?.db.dal.isUnderPopulated(self);
+        return self.tx.db.dal.isUnderPopulated(self);
     }
 
     fn serialize(self: *const Self, buf: []u8) void {

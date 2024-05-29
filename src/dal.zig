@@ -54,7 +54,7 @@ pub const Dal = struct {
                     dal.meta = try allocator.create(Meta);
                     dal.freelist = try allocator.create(FreeList);
                     dal.meta.freeListPage = dal.freelist.getNextPage();
-                    try dal.writeFreelist();
+                    _ = try dal.writeFreelist();
 
                     // init root
                     const collectionsMode = try dal.writeNode(try Node.init(allocator));
@@ -137,18 +137,7 @@ pub const Dal = struct {
         try self.file.pwriteAll(page.data, offset);
     }
 
-    fn writeNode(self: *Self, node: *Node) !void {
-        const page = try self.allocateEmptyPage();
-        if (node.*.pageNum == 0) { // TODO Why
-            page.*.num = self.freelist.getNextPage();
-            node.*.pageNum = page.*.num;
-        } else {
-            page.*.num = node.*.pageNum;
-        }
-
-        node.serialize(page.data);
-    }
-
+    // disk -[copy]-> page -[ref(key,value)]-> node
     fn getNode(self: *Self, pageNum: u64) !*Node {
         const page = try self.readPage(pageNum);
         var node = Node.init(self.allocator);
@@ -157,10 +146,25 @@ pub const Dal = struct {
         return node;
     }
 
+    // node -copy-> page -copy-> disk
+    fn writeNode(self: *Self, node: *Node) !void {
+        const page = try self.allocateEmptyPage();
+        if (node.*.pageNum == 0) { // TODO Why
+            page.*.num = self.freelist.getNextPage();
+            node.*.pageNum = page.*.num;
+        } else {
+            page.*.num = node.*.pageNum;
+        }
+        node.serialize(page.data);
+        try self.writePage(page);
+    }
+
+    // delete node and release it to freelist
     fn deleteNode(self: *Self, pageNum: u64) void {
         self.freelist.releasePage(pageNum);
     }
 
+    // load freelist page
     fn readFreelist(self: *Self) !*FreeList {
         const page = try self.readPage(self.meta.freeListPage);
         var freelist = FreeList.init(self.allocator);
@@ -168,6 +172,7 @@ pub const Dal = struct {
         return freelist;
     }
 
+    // write freelist to page
     fn writeFreelist(self: *Self) !*Page {
         const page = try self.allocateEmptyPage();
         page.*.num = self.meta.*.freeListPage;
