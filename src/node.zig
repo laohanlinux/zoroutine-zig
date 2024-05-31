@@ -250,6 +250,7 @@ pub const Node = struct {
 
     fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) void {}
 
+    fn findKeyInNode(self: const Self, key: []const u8) std.meta.Tuple(&.{ bool, usize }) {}
     fn addItem(self: *Self, item: *Item, insertionIndex: usize) usize {
         self.items.insert(insertionIndex, item) catch unreachable;
         return insertionIndex;

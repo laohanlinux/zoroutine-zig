@@ -6,7 +6,7 @@ export fn add(a: i32, b: i32) i32 {
 }
 
 fn div(a: usize, b: usize) ?usize {
-    _ =  a + b;
+    _ = a + b;
     return null;
 }
 
@@ -14,4 +14,13 @@ test "basic add functionality" {
     const ok = div(0, 0);
     std.debug.print("{?}\n", .{ok == null});
     // try testing.expect(div(3, 7) == 10);
+}
+
+test "multiple results" {
+    const values = getMultipleValues();
+    std.debug.print("{any}. {any}\n", .{ values[0], values[1] });
+}
+
+fn getMultipleValues() std.meta.Tuple(&.{ bool, usize }) {
+    return .{ false, 200 };
 }
