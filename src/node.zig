@@ -248,9 +248,34 @@ pub const Node = struct {
         defer ancestoreIndexes.deinit();
     }
 
-    fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) void {}
+    fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) void {
+        const find = self.findKeyInNode(key);
+        const wasFound = find[0];
+        const index = find[1];
+        if (wasFound) {}
+    }
 
-    fn findKeyInNode(self: const Self, key: []const u8) std.meta.Tuple(&.{ bool, usize }) {}
+    // Iterates all the items and finds the key. If the key is found, then the item is returned. If the key
+    // isn't found then return the index where it should have been (the first index that key is greater than it's previous)
+    fn findKeyInNode(self: *const Self, key: []const u8) std.meta.Tuple(&.{ bool, usize }) {
+        for (self.items.items, 0..) |existingItem, i| {
+            switch (compare({}, existingItem.key, key)) {
+                .eq => {
+                    // key match
+                    return .{ true, i };
+                },
+                .gt => {
+                    // The key is bigger than the previous item, so it doesn't exist in the node, but may exist in child nodes.
+                    return .{ false, i };
+                },
+                .lt => {},
+            }
+        }
+
+        // The key isn't bigger than any of the items which means it's in the last index.
+        return .{ false, self.items.items.len };
+    }
+
     fn addItem(self: *Self, item: *Item, insertionIndex: usize) usize {
         self.items.insert(insertionIndex, item) catch unreachable;
         return insertionIndex;
@@ -429,3 +454,34 @@ pub const Node = struct {
         self.tx.?.deleteNode(bNode);
     }
 };
+
+/// compare returns the order of left and right
+pub fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    var i: usize = 0;
+    while (i < left.len and i < right.len) {
+        if (left[i] == right[i]) {} else if (left[i] < right[i]) {
+            return std.math.Order.lt;
+        } else if (left[i] > right[i]) {
+            return std.math.Order.gt;
+        }
+
+        i += 1;
+    }
+
+    if (left.len == right.len) {
+        return std.math.Order.eq;
+    } else if (left.len < right.len) {
+        return std.math.Order.lt;
+    } else {
+        return std.math.Order.gt;
+    }
+}
+
+/// isGte returns true if left >= right
+pub fn isGte(left: []const u8, right: []const u8) bool {
+    switch (compare({}, left, right)) {
+        .gt => return true,
+        .eq => return true,
+        .lt => return false,
+    }
+}
