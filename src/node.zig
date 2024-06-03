@@ -79,8 +79,8 @@ pub const Node = struct {
     }
 
     // Related to transaction with node
-    fn writeNode(self: *Self, node: *Node) void {
-        _ = self.tx.writeNode(node);
+    fn writeNode(self: *Self, node: *Node) *Node {
+        return self.tx.writeNode(node);
     }
 
     fn writeNodes(self: *Self, nodes: []*Node) void {
@@ -243,16 +243,30 @@ pub const Node = struct {
     /// If the key isn't found, we have 2 options. If exact is true, it means we expect findKey
     /// to find the key, so a falsey answer. If exact is false, then findKey is used to locate where a new key should be
     /// inserted so the position is returned.
-    fn findKey(self: *const Self, key: []const u8, exact: bool) void {
+    fn findKey(self: *const Self, key: []const u8, exact: bool) !std.meta.Tuple(&.{ ?usize, *Node, std.ArrayList(usize) }) {
         const ancestoreIndexes = std.ArrayList(usize).init(self.allocator);
-        defer ancestoreIndexes.deinit();
+        const find = try self.findKeyHelper(self, key, exact, &ancestoreIndexes);
+        return &.{ find[0], find[1], ancestoreIndexes };
     }
 
-    fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) void {
+    fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) !std.meta.Tuple(&.{ ?usize, *Node }) {
         const find = self.findKeyInNode(key);
         const wasFound = find[0];
         const index = find[1];
-        if (wasFound) {}
+        if (wasFound) {
+            return &.{ index, self };
+        }
+        if (node.isLeaf()) {
+            if (exact) {
+                return &.{ null, null };
+            }
+
+            return &.{ index, node };
+        }
+
+        try ancestoreIndexes.append(index);
+        const nextChild = try self.getNode(self.childNodes.items[index]);
+        return self.findKeyHelper(nextChild, key, exact, ancestoreIndexes);
     }
 
     // Iterates all the items and finds the key. If the key is found, then the item is returned. If the key
@@ -298,7 +312,8 @@ pub const Node = struct {
         const middItem = nodeToSplit.items.items[splitIndex];
         var newNode: *Node = null;
         if (nodeToSplit.isLeaf()) {
-            // newNode = self.writeNode(self.tx.?.newNode(node));
+            const tmpNode = self.tx.newNode(nodeToSplit.items.items[splitIndex + 1 ..], &[_]u64{});
+            newNode = self.writeNode(tmpNode);
         }
     }
 

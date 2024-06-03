@@ -33,9 +33,9 @@ pub const TX = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn newNode(self: *Self, items: std.ArrayList(*Item), childNodes: []u64) *Node {
+    pub fn newNode(self: *Self, items: []*const Item, childNodes: []const u64) *Node {
         const node = Node.init(self.allocator);
-        node.items.appendSlice(items.items) catch unreachable;
+        node.items.appendSlice(items) catch unreachable;
         node.childNodes.appendSlice(childNodes) catch unreachable;
         node.pageNum = self.db.dal.freelist.getNextPage();
         node.tx = self;
