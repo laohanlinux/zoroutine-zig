@@ -39,7 +39,7 @@ pub const TX = struct {
         node.childNodes.appendSlice(childNodes) catch unreachable;
         node.pageNum = self.db.dal.freelist.getNextPage();
         node.tx = self;
-        node.tx.?.allocatedPageNums.append(node.pageNum) catch unreachable;
+        node.tx.allocatedPageNums.append(node.pageNum) catch unreachable;
         return node;
     }
 

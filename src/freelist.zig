@@ -50,15 +50,15 @@ pub const FreeList = struct {
     /// serialize serializes the freelist to a buffer.
     pub fn serialize(self: *Self, buf: []u8) void {
         var pos: usize = 0;
-        std.mem.writeInt(u16, buf[0..(pos + 2)], @as(u16, @intCast(self.maxPage)), std.builtin.Endian.big);
+        std.mem.writeInt(u16, buf[pos..(pos + 2)][0..2], @as(u16, @intCast(self.maxPage)), std.builtin.Endian.big);
         pos += 2;
 
         // released pages count
-        std.mem.writeInt(u16, buf[pos..(pos + 2)], @as(u16, @intCast(self.releasedPages.items.len)), std.builtin.Endian.big);
+        std.mem.writeInt(u16, buf[pos..(pos + 2)][0..2], @as(u16, @intCast(self.releasedPages.items.len)), std.builtin.Endian.big);
         pos += 2;
 
         for (self.releasedPages.items) |page| {
-            std.mem.writeInt(u64, buf[pos..(pos + 8)], page, std.builtin.Endian.big);
+            std.mem.writeInt(u64, buf[pos..(pos + 8)][0..8], page, std.builtin.Endian.big);
             pos += 8;
         }
         return;
