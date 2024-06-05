@@ -4,6 +4,7 @@ const Item = @import("./node.zig").Item;
 const DB = @import("./db.zig").DB;
 
 pub const TX = struct {
+    // reference the transaction node that be written!
     dirtyNodes: std.HashMap(u64, *Node, {}, 80),
     pagesToDelete: std.ArrayList(u64),
 
@@ -43,11 +44,12 @@ pub const TX = struct {
         return node;
     }
 
-    pub fn getNode(self: *Self, pageNum: u64) !*Node {
-        // Why
+    pub fn getNode(self: *const Self, pageNum: u64) !*Node {
         if (self.dirtyNodes.get(pageNum)) |node| {
             return node;
         }
+
+        return error.NotFound;
     }
 
     // Write the node with tx, so tx also owns the node

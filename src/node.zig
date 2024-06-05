@@ -1,5 +1,6 @@
 const std = @import("std");
 const transaction = @import("./transaction.zig");
+const compare = @import("./util.zig").compare;
 
 pub const Item = struct {
     key: []u8,
@@ -32,6 +33,7 @@ pub const Node = struct {
 
     allocator: ?std.mem.Allocator,
     const Self = @This();
+    // u8[leaf flag], u16[item count]
     pub const nodeHeaderSize: usize = 3;
 
     // new a empty node with allocator
@@ -79,7 +81,7 @@ pub const Node = struct {
     }
 
     // Related to transaction with node
-    fn writeNode(self: *Self, node: *Node) *Node {
+    pub fn writeNode(self: *Self, node: *Node) *Node {
         return self.tx.writeNode(node);
     }
 
@@ -90,7 +92,7 @@ pub const Node = struct {
     }
 
     /// Get pageNum's node from the transaction
-    fn getNode(self: *Self, pageNum: u64) !*Node {
+    fn getNode(self: *const Self, pageNum: u64) !*Node {
         return self.tx.getNode(pageNum);
     }
 
@@ -105,7 +107,7 @@ pub const Node = struct {
     }
 
     // Checks if the node size is smaller than the size of page.
-    fn isUnderPopulated(self: *const Self) bool {
+    pub fn isUnderPopulated(self: *const Self) bool {
         return self.tx.db.dal.isUnderPopulated(self);
     }
 
@@ -219,8 +221,8 @@ pub const Node = struct {
     /// of a key-value pair is returned. It's assumed i <= items.len.
     fn elementSize(self: *const Self, i: usize) usize {
         var size = 0;
-        size += self.items[i].key.len;
-        size += self.items[i].value.len;
+        size += self.items.items[i].key.len;
+        size += self.items.items[i].value.len;
         size += 8; // 8 is the page number size
         return size;
     }
@@ -243,19 +245,21 @@ pub const Node = struct {
     /// If the key isn't found, we have 2 options. If exact is true, it means we expect findKey
     /// to find the key, so a falsey answer. If exact is false, then findKey is used to locate where a new key should be
     /// inserted so the position is returned.
-    fn findKey(self: *const Self, key: []const u8, exact: bool) !std.meta.Tuple(&.{ ?usize, *Node, std.ArrayList(usize) }) {
+    pub fn findKey(self: *const Self, key: []const u8, exact: bool) !std.meta.Tuple(&.{ ?usize, *Node, std.ArrayList(usize) }) {
         const ancestoreIndexes = std.ArrayList(usize).init(self.allocator);
         const find = try self.findKeyHelper(self, key, exact, &ancestoreIndexes);
         return &.{ find[0], find[1], ancestoreIndexes };
     }
 
-    fn findKeyHelper(self: *const Self, node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) !std.meta.Tuple(&.{ ?usize, *Node }) {
-        const find = self.findKeyInNode(key);
+    // Find a key from node
+    fn findKeyHelper(node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) !std.meta.Tuple(&.{ ?usize, *Node }) {
+        const find = node.findKeyInNode(key);
         const wasFound = find[0];
         const index = find[1];
         if (wasFound) {
-            return &.{ index, self };
+            return &.{ index, node };
         }
+        // If we reached a leaf node and the key was'nt found, it means it doesn't exist.
         if (node.isLeaf()) {
             if (exact) {
                 return &.{ null, null };
@@ -264,9 +268,10 @@ pub const Node = struct {
             return &.{ index, node };
         }
 
+        // Else keep searching the tree
         try ancestoreIndexes.append(index);
-        const nextChild = try self.getNode(self.childNodes.items[index]);
-        return self.findKeyHelper(nextChild, key, exact, ancestoreIndexes);
+        const nextChild = try node.getNode(node.childNodes.items[index]);
+        return Self.findKeyHelper(nextChild, key, exact, ancestoreIndexes);
     }
 
     // Iterates all the items and finds the key. If the key is found, then the item is returned. If the key
@@ -290,7 +295,7 @@ pub const Node = struct {
         return .{ false, self.items.items.len };
     }
 
-    fn addItem(self: *Self, item: *Item, insertionIndex: usize) usize {
+    pub fn addItem(self: *Self, item: *Item, insertionIndex: usize) usize {
         self.items.insert(insertionIndex, item) catch unreachable;
         return insertionIndex;
     }
@@ -308,13 +313,23 @@ pub const Node = struct {
     fn split(self: *Self, nodeToSplit: *Node, nodeToSplitIndex: usize) !void {
         // The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
         // index after.
-        const splitIndex = try nodeToSplit.tx.?.db.dal.getSplitIndex(nodeToSplit);
+        const splitIndex = nodeToSplit.tx.db.dal.getSplitIndex(nodeToSplit) orelse return error.Santy;
         const middItem = nodeToSplit.items.items[splitIndex];
         var newNode: *Node = null;
         if (nodeToSplit.isLeaf()) {
             const tmpNode = self.tx.newNode(nodeToSplit.items.items[splitIndex + 1 ..], &[_]u64{});
             newNode = self.writeNode(tmpNode);
+            try nodeToSplit.items.resize(splitIndex);
+        } else {
+            const tmpNode = self.tx.newNode(nodeToSplit.items.items[splitIndex + 1 ..], nodeToSplit.childNodes.items[splitIndex + 1 ..]);
+            newNode = self.writeNode(tmpNode);
+            try nodeToSplit.items.resize(splitIndex);
+            try nodeToSplit.childNodes.resize(splitIndex + 1);
         }
+
+        _ = self.addItem(middItem, nodeToSplit);
+        try self.childNodes.insert(nodeToSplitIndex + 1, newNode.pageNum);
+        self.writeNodes([_]*Node{ self, nodeToSplit });
     }
 
     // rebalanceRemove rebalances the tree after a remove operation. This can be either by rotating to the right, to the
@@ -469,34 +484,3 @@ pub const Node = struct {
         self.tx.?.deleteNode(bNode);
     }
 };
-
-/// compare returns the order of left and right
-pub fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
-    var i: usize = 0;
-    while (i < left.len and i < right.len) {
-        if (left[i] == right[i]) {} else if (left[i] < right[i]) {
-            return std.math.Order.lt;
-        } else if (left[i] > right[i]) {
-            return std.math.Order.gt;
-        }
-
-        i += 1;
-    }
-
-    if (left.len == right.len) {
-        return std.math.Order.eq;
-    } else if (left.len < right.len) {
-        return std.math.Order.lt;
-    } else {
-        return std.math.Order.gt;
-    }
-}
-
-/// isGte returns true if left >= right
-pub fn isGte(left: []const u8, right: []const u8) bool {
-    switch (compare({}, left, right)) {
-        .gt => return true,
-        .eq => return true,
-        .lt => return false,
-    }
-}
