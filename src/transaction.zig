@@ -28,10 +28,15 @@ pub const TX = struct {
     }
 
     pub fn destroy(self: *Self) void {
-        self.dirtyNodes.deinit();
+        defer self.allocator.destroy(self);
+        defer self.dirtyNodes.deinit();
+        const dirtyNodesItr = self.dirtyNodes.iterator();
+        while (true) {
+            const item = dirtyNodesItr.next() orelse break;
+            item.value_ptr.destroy();
+        }
         self.pagesToDelete.deinit();
         self.allocatedPageNums.deinit();
-        self.allocator.destroy(self);
     }
 
     pub fn newNode(self: *Self, items: []*const Item, childNodes: []const u64) *Node {

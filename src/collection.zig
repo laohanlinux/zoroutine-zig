@@ -79,8 +79,11 @@ pub const Collection = struct {
         if (!self.tx.write) {
             return error.WriteInsideReadTx;
         }
-
-        const item = Item.init(self.allocator, key, value);
+        const cpKey = try self.allocator.alloc(u8, key.len);
+        @memcpy(cpKey, key);
+        const cpValue = try self.allocator.alloc(u8, value.len);
+        @memcpy(cpValue, value);
+        const item = Item.init(self.allocator, cpKey, cpValue);
 
         // On first insertion the root node does not exist, so it should be created
         var _root: *Node = undefined;
@@ -94,10 +97,10 @@ pub const Collection = struct {
         }
 
         // Find the path to the node where the insertion should happen
-        const find = try _root.findKey(item.key, false);
-        const insertionIndex: ?usize = find[0];
-        const nodeToInsertIn: *Node = find[1];
-        const ancestorsIndexes = find[2];
+        const _find = try _root.findKey(item.key, false);
+        const insertionIndex: ?usize = _find[0];
+        const nodeToInsertIn: *Node = _find[1];
+        const ancestorsIndexes = _find[2];
         defer ancestorsIndexes.deinit();
 
         // If key has already exists
@@ -118,18 +121,75 @@ pub const Collection = struct {
         while (i > 0) : (i -= 1) {
             const pNode = ancestors[i - 1];
             const node = ancestors[i];
-            if (node.isUnderPopulated()) {
-                try pNode.rebalance(node, ancestorsIndexes[i]);
+            if (node.isOverPopulated()) {
+                try pNode.split(node, ancestorsIndexes[i]);
             }
         }
 
-        _root = ancestors[0];
-        // If the root has no items after rebalancing, there's no need to save it because we ignore it.
-        if (_root.items.items.len == 0 and _root.childNodes.items.len > 0) {
-            self.root = ancestors[1].pageNum;
+        // Handle root
+        const rootNode = ancestors[0];
+        if (_root.isOverPopulated()) {
+            const newRoot = self.tx.newNode(null, [_]u64{rootNode.pageNum});
+            newRoot.split(rootNode, 0);
+
+            // Commit newly created root
+            newRoot = self.tx.writeNode(newRoot);
+            std.log.info("change root pageid from {any} to {any}", .{ self.root, newRoot.pageNum });
+            self.root = newRoot.pageNum;
+        }
+        return;
+    }
+
+    // Returns an item according based on the given key by performing a binary search.
+    pub fn find(self: *const Self, key: []const u8) !*Item {
+        var node = try self.tx.getNode(self.root);
+        const _find = try node.findKey(key, true);
+
+        const index = _find[0] orelse return error.NotFound;
+        return _find[1].items.items[index];
+    }
+
+    // Removes a key from the tree. It finds the correct node and the index to remove the item from and removes it.
+    // When performing the search, the ancestors are returned as well. This way we can iterate over them to check which
+    // nodes were modified and rebalance by rotating or merging the unbalanced nodes. Rotation is done first. If the
+    // siblings don't have enough items, then merging occurs. If the root is without items after a split, then the root is
+    // removed and the tree is one level shorter.
+    pub fn remove(self: *Self, key: []const u8) !void {
+        if (!self.tx.write) {
+            return error.WriteInsideReadTx;
         }
 
-        return;
+        // Find the path to the node where the deletion should happen
+        var rootNode = try self.tx.getNode(self.root);
+        const _find = try rootNode.findKey(key, true);
+
+        const removeItemIndex: usize = _find[0] orelse return;
+        var nodeToRemoveFrom: *Node = _find[1];
+        var ancestorsIndexes: []usize = _find[2];
+        if (nodeToRemoveFrom.isLeaf()) {
+            nodeToRemoveFrom.removeItemFromLeaf(removeItemIndex);
+        } else {
+            const affectedNodes = try nodeToRemoveFrom.removeItemFromInternal(removeItemIndex);
+            ancestorsIndexes = ancestorsIndexes ++ affectedNodes;
+        }
+
+        const ancestors = try self.getNodes(ancestorsIndexes);
+        // Rebalance the nodes all the way up. Start From one node before the last and go all the way up. Exclude root.
+        var i = ancestors.len - 1;
+        while (i > 0) : (i -= 1) {
+            const pNode = ancestors[i - 1];
+            const node = ancestors[i];
+            if (node.isUnderPopulated()) {
+                try pNode.rebalanceRemove(node, ancestorsIndexes[i]);
+            }
+        }
+
+        rootNode = ancestors[0];
+
+        // If the root has no items after rebalancing, there's no need to save it because we ignore it.
+        if (rootNode.items.items.len == 0 and rootNode.childNodes.items.len > 0) {
+            self.root = ancestors[1].pageNum;
+        }
     }
 
     // getNodes returns a list of nodes based on their indexes (the breadcrumbs) from the root

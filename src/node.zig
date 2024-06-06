@@ -97,7 +97,7 @@ pub const Node = struct {
     }
 
     /// Checks if the node size is bigger than the size of a page.
-    fn isOverPopulated(self: *const Self) bool {
+    pub fn isOverPopulated(self: *const Self) bool {
         return self.tx.db.dal.isOverPopulated(self);
     }
 
@@ -310,7 +310,7 @@ pub const Node = struct {
     //	      /        \           ------>       /          |          \
     //	   a           modifiedNode            a       modifiedNode     newNode
     //   1,2                 4,5,6,7,8            1,2          4,5         7,8
-    fn split(self: *Self, nodeToSplit: *Node, nodeToSplitIndex: usize) !void {
+    pub fn split(self: *Self, nodeToSplit: *Node, nodeToSplitIndex: usize) !void {
         // The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
         // index after.
         const splitIndex = nodeToSplit.tx.db.dal.getSplitIndex(nodeToSplit) orelse return error.Santy;
@@ -336,7 +336,7 @@ pub const Node = struct {
     // left or by merging. First, the sibling nodes are checked to see if they have enough items for rebalancing
     // (>= minItems+1). If they don't have enough items, then merging with one of the sibling nodes occurs. This may leave
     // the parent unbalanced by having too little items so rebalancing has to be checked for all the ancestors.
-    fn rebalanceRemove(self: *Self, unbalanceNode: *Node, unbalanceIndex: usize) !void {
+    pub fn rebalanceRemove(self: *Self, unbalanceNode: *Node, unbalanceIndex: usize) !void {
         const pNode = self;
         // Right rotate
         if (unbalanceIndex != 0) {
@@ -370,13 +370,13 @@ pub const Node = struct {
     }
 
     // Removes an item from a leaf node. it means there is no handling of child nodes.
-    fn removeItemFromLeaf(self: *Self, index: usize) void {
-        // TODO maybe need to free it
+    pub fn removeItemFromLeaf(self: *Self, index: usize) void {
         _ = self.items.orderedRemove(index);
         self.writeNode(self);
     }
 
-    fn removeItemFromInternal(self: *Self, index: usize) ![]usize {
+    // https://miro.medium.com/v2/resize:fit:1400/format:webp/1*U44xKwRNxHWt2npMz7hU7A.png
+    pub fn removeItemFromInternal(self: *Self, index: usize) ![]usize {
         // Take element before inorder (The biggest element from the left branch), put it in the removed index and remove
         // it from the original node. Track in affectedNodes any nodes in the path leading to that node. It will be used
         // in case the tree needs to be rebalanced.
@@ -397,9 +397,8 @@ pub const Node = struct {
         }
 
         // Replace the item that should be removed with the item before inorder which we just found.
-        self.items.items[index] = aNode.items.getLast();
-        self.writeNode(self);
-        self.writeNode(aNode);
+        self.items.items[index] = aNode.items.pop() catch unreachable;
+        self.writeNodes([_]*Node{ self, aNode });
 
         const _affectedNodes = try affectedNodes.toOwnedSlice();
         return _affectedNodes;
@@ -410,7 +409,7 @@ pub const Node = struct {
         //             4                                    3
         //	      /        \           ------>         /          \
         //	   a           b (unbalanced)            a        b (unbalanced)
-        //      1,2,3             5                     1,2            4,5
+        //   1,2,3             5                     1,2            4,5
 
         // Get last item and remove it
         const aNodeItem = aNode.items.pop();
@@ -434,7 +433,7 @@ pub const Node = struct {
         // 	           p                                     p
         //             2                                     3
         //	      /        \           ------>         /          \
-        //  a(unbalanced)       b                 a(unbalanced)        b
+        //  a(unbalanced)    b                 a(unbalanced)        b
         //   1                3,4,5                   1,2             4,5
 
         // Get first item and remove it
