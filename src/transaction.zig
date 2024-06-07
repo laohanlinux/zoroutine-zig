@@ -48,7 +48,6 @@ pub const TX = struct {
         node.tx.allocatedPageNums.append(node.pageNum) catch unreachable;
         return node;
     }
-
     pub fn getNode(self: *const Self, pageNum: u64) !*Node {
         if (self.dirtyNodes.get(pageNum)) |node| {
             return node;

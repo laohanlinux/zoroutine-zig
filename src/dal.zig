@@ -115,7 +115,7 @@ pub const Dal = struct {
     }
 
     pub fn isUnderPopulated(self: *Self) bool {
-        return self.freelist.isUnderPopulated();
+        return self.freelist.?.isUnderPopulated();
     }
 
     fn allocateEmptyPage(self: *Self) !*Page {

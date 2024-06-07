@@ -294,7 +294,6 @@ pub const Node = struct {
         // The key isn't bigger than any of the items which means it's in the last index.
         return .{ false, self.items.items.len };
     }
-
     pub fn addItem(self: *Self, item: *Item, insertionIndex: usize) usize {
         self.items.insert(insertionIndex, item) catch unreachable;
         return insertionIndex;
@@ -412,20 +411,20 @@ pub const Node = struct {
         //   1,2,3             5                     1,2            4,5
 
         // Get last item and remove it
-        const aNodeItem = aNode.items.pop();
+        const aNodeItem = aNode.items.pop(); // 3, if 3 is branch, it's last children also should be move
 
         // Get item from parent node and assign the aNodeItem item instead
         const pNodeItemIndex: usize = if (Self.isFirst(bNodeIndex)) 0 else bNodeIndex;
-        const pNodeItem = pNode.items.items[pNodeItemIndex];
-        pNode.items.items[pNodeItemIndex] = aNodeItem;
+        const pNodeItem = pNode.items.items[pNodeItemIndex]; // 4
+        pNode.items.items[pNodeItemIndex] = aNodeItem; // p4->p3
 
         // Assign parent item to b and make it first
-        bNode.items.insert(0, pNodeItem) catch unreachable;
+        bNode.items.insert(0, pNodeItem) catch unreachable; // 4 --> b level, as the first item
 
         // If it's an inner leaf then move children as well.
         if (!aNode.isLeaf()) {
-            const childNodeToShift = aNode.childNodes.pop();
-            bNode.childNodes.insert(0, childNodeToShift);
+            const childNodeToShift = aNode.childNodes.pop(); // a' last one children move to b level
+            bNode.childNodes.insert(0, childNodeToShift); // move 3's children to b level as 4's left children
         }
     }
 
@@ -477,9 +476,7 @@ pub const Node = struct {
             try aNode.childNodes.appendSlice(bNode.childNodes.items);
         }
 
-        self.writeNode(aNode);
-        self.writeNode(self);
-
-        self.tx.?.deleteNode(bNode);
+        self.writeNodes([_]*Node{aNode, self});
+        self.tx.deleteNode(bNode); // recycel the node
     }
 };
