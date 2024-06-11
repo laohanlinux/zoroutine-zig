@@ -93,33 +93,33 @@ pub const Node = struct {
 
     // Related to transaction with node
     pub fn writeNode(self: *Self, node: *Node) *Node {
-        return self.tx.writeNode(node);
+        return self.tx.?.writeNode(node);
     }
 
     fn writeNodes(self: *Self, nodes: []*Node) void {
         for (nodes) |node| {
-            _ = self.tx.writeNode(node);
+            _ = self.tx.?.writeNode(node);
         }
     }
 
     /// Get pageNum's node from the transaction
     fn getNode(self: *const Self, pageNum: u64) !*Node {
-        return self.tx.getNode(pageNum);
+        return self.tx.?.getNode(pageNum);
     }
 
     /// Checks if the node size is bigger than the size of a page.
     pub fn isOverPopulated(self: *const Self) bool {
-        return self.tx.db.dal.isOverPopulated(self);
+        return self.tx.?.db.dal.isOverPopulated(self);
     }
 
     // checks if the node size is big enough to populate a page after giving away one item.
     fn canSpareAnElement(self: *const Self) bool {
-        return self.tx.db.dal.getSplitIndex(self) != null;
+        return self.tx.?.db.dal.getSplitIndex(self) != null;
     }
 
     // Checks if the node size is smaller than the size of page.
     pub fn isUnderPopulated(self: *const Self) bool {
-        return self.tx.db.dal.isUnderPopulated(self);
+        return self.tx.?.db.dal.isUnderPopulated(self);
     }
 
     pub fn serialize(self: *const Self, buf: []u8) void {
@@ -323,16 +323,16 @@ pub const Node = struct {
     pub fn split(self: *Self, nodeToSplit: *Node, nodeToSplitIndex: usize) !void {
         // The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
         // index after.
-        const splitIndex = nodeToSplit.tx.db.dal.getSplitIndex(nodeToSplit) orelse return error.Santy;
+        const splitIndex = nodeToSplit.tx.?.db.dal.getSplitIndex(nodeToSplit) orelse return error.Santy;
         const middItem = nodeToSplit.items.items[splitIndex];
         var newNode: *Node = null;
         if (nodeToSplit.isLeaf()) {
-            const tmpNode = self.tx.newNode(nodeToSplit.items.items[splitIndex + 1 ..], &[_]u64{});
+            const tmpNode = self.tx.?.newNode(nodeToSplit.items.items[splitIndex + 1 ..], &[_]u64{});
             newNode = self.writeNode(tmpNode);
             try nodeToSplit.items.resize(splitIndex);
         } else {
-            const tmpNode = self.tx.newNode(nodeToSplit.items.items[splitIndex + 1 ..], nodeToSplit.childNodes.items[splitIndex + 1 ..]);
-            newNode = self.writeNode(tmpNode);
+            newNode = self.tx.?.newNode(nodeToSplit.items.items[splitIndex + 1 ..], nodeToSplit.childNodes.items[splitIndex + 1 ..]);
+            newNode = self.writeNode(newNode);
             try nodeToSplit.items.resize(splitIndex);
             try nodeToSplit.childNodes.resize(splitIndex + 1);
         }
@@ -373,7 +373,7 @@ pub const Node = struct {
         // parameters, so the unbalanced node right sibling, will be merged into the unbalanced node.
         if (unbalanceIndex == 0) {
             const rightNode = try self.getNode(pNode.childNodes.items[unbalanceIndex + 1]);
-            return Self.merge(rightNode, unbalanceIndex + 1);
+            return pNode.merge(rightNode, unbalanceIndex + 1);
         }
 
         return pNode.merge(unbalanceNode, unbalanceIndex);
@@ -382,7 +382,7 @@ pub const Node = struct {
     // Removes an item from a leaf node. it means there is no handling of child nodes.
     pub fn removeItemFromLeaf(self: *Self, index: usize) void {
         _ = self.items.orderedRemove(index);
-        self.writeNode(self);
+        _ = self.writeNode(self);
     }
 
     // https://miro.medium.com/v2/resize:fit:1400/format:webp/1*U44xKwRNxHWt2npMz7hU7A.png
@@ -488,6 +488,6 @@ pub const Node = struct {
         }
 
         self.writeNodes([_]*Node{ aNode, self });
-        self.tx.deleteNode(bNode); // recycel the node
+        self.tx.?.deleteNode(bNode); // recycle the node
     }
 };

@@ -48,9 +48,7 @@ pub const Dal = struct {
         defer std.log.info("has init db!", .{});
         var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
-        if (dal.pageSize == 0) {
-            dal.*.pageSize = 1 << 12;
-        }
+        std.debug.assert(dal.*.pageSize > 0);
         dal.allocator = allocator;
         std.debug.assert(dal.*.pageSize > 0);
         const stat = std.fs.cwd().statFile(path) catch |err| {
@@ -124,8 +122,9 @@ pub const Dal = struct {
         return self.minFillPercent * @as(f32, @intCast(self.pageSize));
     }
 
-    pub fn isUnderPopulated(self: *Self) bool {
-        return self.freelist.?.isUnderPopulated();
+    pub fn isUnderPopulated(self: *const Self, node: *const Node) bool {
+        const nodeSize = @as(f32, node.nodeSize());
+        return (nodeSize < self.minThreshold());
     }
 
     fn allocateEmptyPage(self: *Self) !*Page {
@@ -148,7 +147,7 @@ pub const Dal = struct {
     }
 
     // disk -[copy]-> page -[ref(key,value)]-> node
-    fn getNode(self: *Self, pageNum: u64) !*Node {
+    pub fn getNode(self: *Self, pageNum: u64) !*Node {
         const page = try self.readPage(pageNum);
         defer self.allocator.destroy(page);
 
@@ -159,7 +158,7 @@ pub const Dal = struct {
     }
 
     // node -copy-> page -copy-> disk
-    fn writeNode(self: *Self, node: *Node) !*Node {
+    pub fn writeNode(self: *Self, node: *Node) !*Node {
         var page = try self.allocateEmptyPage();
         defer page.deinit(self.allocator);
         if (node.*.pageNum == 0) { // TODO Why
@@ -174,7 +173,7 @@ pub const Dal = struct {
     }
 
     // delete node and release it to freelist
-    fn deleteNode(self: *Self, pageNum: u64) void {
+    pub fn deleteNode(self: *Self, pageNum: u64) void {
         self.freelist.releasePage(pageNum);
     }
 
@@ -188,7 +187,7 @@ pub const Dal = struct {
     }
 
     // write freelist to page
-    fn writeFreelist(self: *Self) !*Page {
+    pub fn writeFreelist(self: *Self) !*Page {
         const page = try self.allocateEmptyPage();
         page.*.num = self.meta.*.freeListPage;
         self.freelist.serialize(page.data);

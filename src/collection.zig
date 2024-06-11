@@ -5,11 +5,11 @@ const Node = @import("./node.zig").Node;
 const util = @import("./util.zig");
 
 pub const Collection = struct {
-    name: []const u8,
+    name: ?[]u8,
     root: u64,
     counter: u64,
     // associated transaction
-    tx: *Tx,
+    tx: ?*Tx,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -18,8 +18,8 @@ pub const Collection = struct {
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, root: u64) *Collection {
         var c = allocator.create(Self) catch unreachable;
-        c.name = allocator.create(u8, name.len) catch unreachable;
-        std.mem.copyForwards(u8, c.name, name);
+        c.name.? = allocator.alloc(u8, name.len) catch unreachable;
+        std.mem.copyForwards(u8, c.name.?, name);
         c.root = root;
         c.allocator = allocator;
         return c;
@@ -32,6 +32,9 @@ pub const Collection = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.name) |name| {
+            self.allocator.free(name);
+        }
         self.allocator.destroy(self);
     }
 
@@ -56,12 +59,12 @@ pub const Collection = struct {
         std.mem.writeInt(u64, b[leftPos..(leftPos + 8)][0..8], self.counter, std.builtin.Endian.big);
         leftPos += 8;
 
-        const item = Item.init(self.allocator, self.name, b);
+        const item = Item.init(self.allocator, self.name.?, b);
         return item;
     }
 
     pub fn deseriliaze(self: *Self, item: *const Item) void {
-        self.name = item.key;
+        self.name.? = item.key;
         if (item.value.len > 0) {
             var leftPos: usize = 0;
             self.root = std.mem.readVarInt(u64, item.value[leftPos..], std.builtin.Endian.big);
@@ -76,7 +79,7 @@ pub const Collection = struct {
     /// rebalance by splitting them accordingly. If the root has too many items, then a new root of a new layer is
     /// created and the created nodes from the split are added as children.
     pub fn put(self: *Self, key: []u8, value: []u8) !void {
-        if (!self.tx.write) {
+        if (!self.tx.?.write) {
             return error.WriteInsideReadTx;
         }
         const cpKey = try self.allocator.alloc(u8, key.len);
@@ -88,12 +91,12 @@ pub const Collection = struct {
         // On first insertion the root node does not exist, so it should be created
         var _root: *Node = undefined;
         if (self.root == 0) {
-            _root = self.tx.writeNode(self.tx.newNode([_]*Item{item}, null));
+            _root = self.tx.?.writeNode(self.tx.?.newNode([_]*Item{item}, null));
             self.root = _root.pageNum;
             _root.destroy();
             return;
         } else {
-            _root = try self.tx.getNode(self.root);
+            _root = try self.tx.?.getNode(self.root);
         }
 
         // Find the path to the node where the insertion should happen
@@ -107,10 +110,10 @@ pub const Collection = struct {
         if (nodeToInsertIn.items.items.len < insertionIndex and util.isEq(.{}, nodeToInsertIn.items.items[insertionIndex].key, key)) {
             nodeToInsertIn.items[insertionIndex] = item;
         } else {
+            // Because find key with exact=false, so if not found the key, it also return a good index of node and the node is **leaf node**.
             // Add item to the leaf node
             _ = nodeToInsertIn.addItem(item, insertionIndex);
         }
-
         _ = nodeToInsertIn.writeNode(nodeToInsertIn);
 
         const ancestors = try self.getNodes(ancestorsIndexes.items);
@@ -129,11 +132,11 @@ pub const Collection = struct {
         // Handle root
         const rootNode = ancestors[0];
         if (_root.isOverPopulated()) {
-            const newRoot = self.tx.newNode(null, [_]u64{rootNode.pageNum});
+            const newRoot = self.tx.?.newNode(null, [_]u64{rootNode.pageNum});
             newRoot.split(rootNode, 0);
 
             // Commit newly created root
-            newRoot = self.tx.writeNode(newRoot);
+            newRoot = self.tx.?.writeNode(newRoot);
             std.log.info("change root pageid from {any} to {any}", .{ self.root, newRoot.pageNum });
             self.root = newRoot.pageNum;
         }
@@ -142,7 +145,7 @@ pub const Collection = struct {
 
     // Returns an item according based on the given key by performing a binary search.
     pub fn find(self: *const Self, key: []const u8) !*Item {
-        var node = try self.tx.getNode(self.root);
+        var node = try self.tx.?.getNode(self.root);
         const _find = try node.findKey(key, true);
 
         const index = _find[0] orelse return error.NotFound;
@@ -155,12 +158,12 @@ pub const Collection = struct {
     // siblings don't have enough items, then merging occurs. If the root is without items after a split, then the root is
     // removed and the tree is one level shorter.
     pub fn remove(self: *Self, key: []const u8) !void {
-        if (!self.tx.write) {
+        if (!self.tx.?.write) {
             return error.WriteInsideReadTx;
         }
 
         // Find the path to the node where the deletion should happen
-        var rootNode = try self.tx.getNode(self.root);
+        var rootNode = try self.tx.?.getNode(self.root);
         const _find = try rootNode.findKey(key, true);
 
         const removeItemIndex: usize = _find[0] orelse return;
@@ -174,6 +177,8 @@ pub const Collection = struct {
         }
 
         const ancestors = try self.getNodes(ancestorsIndexes);
+        defer self.allocator.free(ancestors);
+
         // Rebalance the nodes all the way up. Start From one node before the last and go all the way up. Exclude root.
         var i = ancestors.len - 1;
         while (i > 0) : (i -= 1) {
@@ -192,7 +197,7 @@ pub const Collection = struct {
         }
     }
 
-    // getNodes returns a list of nodes based on their indexes (the breadcrumbs) from the root
+    // Returns a list of nodes based on their indexes (the breadcrumbs) from the root
     //           p
     //       /       \
     //     a          b
@@ -200,16 +205,16 @@ pub const Collection = struct {
     // c       d   e     f
     // For [0,1,0] -> p,b,e
     pub fn getNodes(self: *const Self, indexes: []const usize) ![]*Node {
-        const _root = try self.tx.getNode(self.root);
-        var nodes = try self.allocator.alloc(*Node, indexes.len + 1);
-        @memset(nodes, null);
-        nodes[0] = _root;
-        var child = nodes[0];
-        for (indexes, 0..) |index, i| {
-            child = try self.tx.getNode(child.childNodes.items[index]);
-            nodes[i + 1] = child;
+        const _root = try self.tx.?.getNode(self.root);
+        var nodes = try std.ArrayList(*Node).initCapacity(self.allocator, indexes.len + 1);
+        try nodes.append(_root);
+
+        var child = nodes.items[0];
+        for (indexes) |index| {
+            child = try self.tx.?.getNode(child.childNodes.items[index]);
+            try nodes.append(child);
         }
 
-        return nodes;
+        return nodes.items;
     }
 };
