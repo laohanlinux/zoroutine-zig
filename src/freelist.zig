@@ -20,11 +20,11 @@ pub const FreeList = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) *Self {
-        return allocator.create(Self{
-            .maxPage = 0,
-            .releasedPages = std.ArrayList(u64).init(allocator),
-            .allocator = allocator,
-        }) catch unreachable;
+        var self = allocator.create(Self) catch unreachable;
+        self.maxPage = 0;
+        self.releasedPages = std.ArrayList(u64).init(allocator);
+        self.allocator = allocator;
+        return self;
     }
 
     pub fn destroy(self: *Self, allocator: std.mem.Allocator) void {
@@ -67,17 +67,17 @@ pub const FreeList = struct {
     /// deserialize deserializes the freelist from a buffer.
     pub fn deserialize(self: *Self, buf: []u8) void {
         var pos: usize = 0;
-        const _maxPage = std.mem.readInt(u16, buf[pos..(pos + 2)], std.builtin.Endian.big);
+        const _maxPage = std.mem.readInt(u16, buf[pos..(pos + 2)][0..2], std.builtin.Endian.big);
         self.maxPage = @as(u16, _maxPage);
         pos += 2;
 
         // released pages count
-        const releasePageCount = std.mem.readInt(u16, buf[pos..(pos + 2)], std.builtin.Endian.big);
+        var releasePageCount = std.mem.readInt(u16, buf[pos..(pos + 2)][0..2], std.builtin.Endian.big);
         pos += 2;
 
         // released pages
         while (releasePageCount > 0) : (releasePageCount -= 1) {
-            self.releasedPages.append(std.mem.readInt(u64, buf[pos..(pos + 8)], std.builtin.Endian.big)) catch unreachable;
+            self.releasedPages.append(std.mem.readInt(u64, buf[pos..(pos + 8)][0..8], std.builtin.Endian.big)) catch unreachable;
             pos += 8;
         }
     }

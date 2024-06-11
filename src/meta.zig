@@ -21,30 +21,34 @@ pub const Meta = struct {
         return self;
     }
 
+    pub fn destroy(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
+    }
+
     pub fn serialize(self: *const Self, buf: []u8) void {
         var pos: usize = 0;
-        std.mem.writeInt(u32, buf[pos..(pos + 4)], MagicNumber, Endian.big);
+        std.mem.writeInt(u32, buf[pos..(pos + 4)][0..4], MagicNumber, Endian.big);
         pos += 4;
 
-        std.mem.writeInt(u64, buf[pos..(pos + 8)], self.root, Endian.big);
+        std.mem.writeInt(u64, buf[pos..(pos + 8)][0..8], self.root, Endian.big);
         pos += 8;
 
-        std.mem.writeInt(u64, buf[pos..(pos + 8)], self.freeListPage, Endian.big);
+        std.mem.writeInt(u64, buf[pos..(pos + 8)][0..8], self.freeListPage, Endian.big);
         pos += 8;
     }
 
     pub fn deserialize(self: *Self, buf: []u8) void {
         var pos: usize = 0;
-        const _magicNumber = std.mem.readInt(u32, buf[pos..(pos + 4)], Endian.big);
+        const _magicNumber = std.mem.readInt(u32, buf[pos..(pos + 4)][0..4], Endian.big);
         pos += 4;
         if (_magicNumber != MagicNumber) {
             @panic("The file is not a libra db file");
         }
 
-        self.root = std.mem.readInt(u64, buf[pos..(pos + 8)], Endian.big);
+        self.root = std.mem.readInt(u64, buf[pos..(pos + 8)][0..8], Endian.big);
         pos += 8;
 
-        self.freeListPage = std.mem.writeInt(u64, buf[pos..(pos + 8)], Endian.big);
+        self.freeListPage = std.mem.readInt(u64, buf[pos..(pos + 8)][0..8], Endian.big);
         pos += 8;
     }
 };

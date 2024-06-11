@@ -4,13 +4,13 @@ const FreeList = @import("./freelist.zig").FreeList;
 const Node = @import("./node.zig").Node;
 
 pub const Options = struct {
-    pageSize: usize,
-    minFillPercent: f32,
-    maxFillPercent: f32,
+    pageSize: usize = 0,
+    minFillPercent: f32 = 0.5,
+    maxFillPercent: f32 = 0.9,
 };
 
 pub const DefaultOptions = Options{
-    .pageSize = 0,
+    .pageSize = std.mem.page_size,
     .minFillPercent = 0.5,
     .maxFillPercent = 0.9,
 };
@@ -23,11 +23,12 @@ const Page = struct {
         const page = try allocator.create(Page);
         page.*.num = 0;
         page.*.data = try allocator.alloc(u8, dataSize);
-        @memset(page.data, 0);
+        @memset(page.data[0..dataSize], 0);
         return page;
     }
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
+        std.log.info("free page: num:{}, data:{}", .{ self.*.num, self.*.data.len });
         allocator.free(self.data);
         allocator.destroy(self);
     }
@@ -44,24 +45,32 @@ pub const Dal = struct {
 
     const Self = @This();
     pub fn init(allocator: std.mem.Allocator, path: []const u8, options: Options) !*Self {
+        defer std.log.info("has init db!", .{});
         var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
+        if (dal.pageSize == 0) {
+            dal.*.pageSize = 1 << 12;
+        }
         dal.allocator = allocator;
+        std.debug.assert(dal.*.pageSize > 0);
         const stat = std.fs.cwd().statFile(path) catch |err| {
             switch (err) {
                 std.fs.File.OpenError.FileNotFound => {
                     dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .exclusive = true });
                     dal.meta = try allocator.create(Meta);
-                    dal.freelist = try allocator.create(FreeList);
+                    dal.freelist = FreeList.init(allocator);
                     dal.meta.freeListPage = dal.freelist.getNextPage();
-                    _ = try dal.writeFreelist();
-
+                    var freePage = try dal.writeFreelist();
+                    defer freePage.deinit(allocator);
                     // init root
-                    const collectionsMode = try dal.writeNode(try Node.init(allocator));
-                    dal.root = collectionsMode.pageNum;
-
+                    const rootNode = Node.init(allocator);
+                    const collectionsMode = try dal.writeNode(rootNode);
+                    defer collectionsMode.destroy();
+                    dal.meta.root = collectionsMode.*.pageNum;
                     // Write meta page.
-                    _ = try dal.writeNode(dal.meta); // other error
+                    const page = try dal.writeMeta(dal.meta); // other error
+                    defer page.deinit(allocator);
+                    std.log.info("rootNode:{}, freeListNode:{}, metaNode:{}", .{ rootNode.*.pageNum, freePage.*.num, 0 });
                     return dal;
                 },
                 else => {
@@ -73,13 +82,14 @@ pub const Dal = struct {
         dal.file = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{ .mode = .read_write });
         dal.meta = try dal.readMeta();
         dal.freelist = try dal.readFreelist();
+        std.log.info("rootNode: {}, freeListNode: {}, metaNode: {}", .{ dal.meta.*.root, dal.meta.*.freeListPage, 0 });
         return dal;
     }
 
     pub fn deinit(self: *Self) void {
         self.file.close();
-        self.allocator.destroy(self.meta);
-        self.allocator.destroy(self.freelist);
+        self.meta.destroy(self.allocator);
+        self.freelist.destroy(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -140,6 +150,8 @@ pub const Dal = struct {
     // disk -[copy]-> page -[ref(key,value)]-> node
     fn getNode(self: *Self, pageNum: u64) !*Node {
         const page = try self.readPage(pageNum);
+        defer self.allocator.destroy(page);
+
         var node = Node.init(self.allocator);
         node.deserialize(page.data);
         node.*.pageNum = pageNum;
@@ -147,8 +159,9 @@ pub const Dal = struct {
     }
 
     // node -copy-> page -copy-> disk
-    fn writeNode(self: *Self, node: *Node) !void {
-        const page = try self.allocateEmptyPage();
+    fn writeNode(self: *Self, node: *Node) !*Node {
+        var page = try self.allocateEmptyPage();
+        defer page.deinit(self.allocator);
         if (node.*.pageNum == 0) { // TODO Why
             page.*.num = self.freelist.getNextPage();
             node.*.pageNum = page.*.num;
@@ -157,6 +170,7 @@ pub const Dal = struct {
         }
         node.serialize(page.data);
         try self.writePage(page);
+        return node;
     }
 
     // delete node and release it to freelist
@@ -166,7 +180,8 @@ pub const Dal = struct {
 
     // load freelist page
     fn readFreelist(self: *Self) !*FreeList {
-        const page = try self.readPage(self.meta.freeListPage);
+        var page = try self.readPage(self.meta.freeListPage);
+        defer page.deinit(self.allocator);
         var freelist = FreeList.init(self.allocator);
         freelist.deserialize(page.data);
         return freelist;
@@ -178,6 +193,7 @@ pub const Dal = struct {
         page.*.num = self.meta.*.freeListPage;
         self.freelist.serialize(page.data);
         try self.writePage(page);
+        std.log.info("write free list, pid: {}", .{page.*.num});
         return page;
     }
 
@@ -186,11 +202,13 @@ pub const Dal = struct {
         page.*.num = Meta.pageMetaNum;
         meta.serialize(page.data);
         try self.writePage(page);
+        std.log.info("succed to write meta page, {}!", .{page.*.num});
         return page;
     }
 
     fn readMeta(self: *Self) !*Meta {
         const page = try self.readPage(Meta.pageMetaNum);
+        defer page.deinit(self.allocator);
         const meta = Meta.init(self.allocator);
         meta.deserialize(page.data);
         return meta;

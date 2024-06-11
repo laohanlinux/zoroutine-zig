@@ -1,10 +1,14 @@
 const std = @import("std");
-const Dal = @import("./dal.zig").Dal;
+const dal = @import("./dal.zig");
+const Dal = dal.Dal;
 
 pub fn main() !void {
-    const allocator = std.heap.GeneralPurposeAllocator(.{}).allocator();
+    var gpt = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpt.deinit();
+    const allocator = gpt.allocator();
+
     const path = "libra.db";
-    const db = try Dal.init(allocator, path, .{});
+    const db = try Dal.init(allocator, path, dal.DefaultOptions);
     defer db.deinit();
     std.log.info("db page's size: {}\n", .{db.pageSize});
 }

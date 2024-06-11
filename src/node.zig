@@ -25,7 +25,7 @@ pub const Item = struct {
 
 pub const Node = struct {
     // associated transaction
-    tx: *transaction.TX,
+    tx: ?*transaction.TX,
 
     pageNum: u64,
     items: std.ArrayList(*Item),
@@ -44,6 +44,7 @@ pub const Node = struct {
         self.items = std.ArrayList(*Item).init(allocator);
         self.pageNum = 0;
         self.tx = null;
+        return self;
     }
 
     /// creates a new node only with the properties that are relevant when savuing to the disk
@@ -58,14 +59,24 @@ pub const Node = struct {
     }
 
     pub fn destroy(self: *Self) void {
+        defer if (self.allocator) |allocator| {
+            allocator.destroy(self);
+            std.log.info("stroy self", .{});
+        };
+        const pid = self.*.pageNum;
+        defer std.log.info("after destroy node {}!", .{pid});
+        std.log.info("before destroy node {}!", .{pid});
         for (self.items.items) |item| {
+            std.log.info("free item", .{});
             item.destroy();
         }
         self.items.deinit();
-        self.childNodes.deinit();
-        if (self.allocator) |allocator| {
-            allocator.destroy(self);
+
+        if (self.tx) |_tx| {
+            std.log.info("to free tx!", .{});
+            _tx.destroy();
         }
+        self.childNodes.deinit();
     }
 
     pub fn isLeaf(self: *const Self) bool {
@@ -111,7 +122,7 @@ pub const Node = struct {
         return self.tx.db.dal.isUnderPopulated(self);
     }
 
-    fn serialize(self: *const Self, buf: []u8) void {
+    pub fn serialize(self: *const Self, buf: []u8) void {
         var leftPos: usize = 0;
         var rightPos: usize = buf.len - 1;
         // Add page header: isLeaf, key-value pairs count, node num
@@ -125,7 +136,7 @@ pub const Node = struct {
         leftPos += 1;
 
         // key-value pairs count
-        std.mem.writeInt(u16, buf[leftPos..(leftPos + 2)], @as(u16, @intCast(self.items.items.len)), std.builtin.Endian.big);
+        std.mem.writeInt(u16, buf[leftPos..(leftPos + 2)][0..2], @as(u16, @intCast(self.items.items.len)), std.builtin.Endian.big);
         leftPos += 2;
 
         // We use slotted pages for storing data in the page. It means the actual keys and values (the cells) are appended
@@ -143,7 +154,7 @@ pub const Node = struct {
             if (!_isLeaf) {
                 const childNode = self.childNodes.items[i];
                 // Write the child page as a fixed size of 8 bytes.
-                std.mem.writeInt(u64, buf[leftPos..(leftPos + 8)], childNode, std.builtin.Endian.big);
+                std.mem.writeInt(u64, buf[leftPos..(leftPos + 8)][0..8], childNode, std.builtin.Endian.big);
                 leftPos += 8;
             }
 
@@ -152,26 +163,26 @@ pub const Node = struct {
 
             // write offset
             const offset = rightPos - klen - vlen - 2;
-            std.mem.writeInt(u16, buf[leftPos..(leftPos + 2)], @as(u16, @intCast(offset)), std.builtin.Endian.big);
+            std.mem.writeInt(u16, buf[leftPos..(leftPos + 2)][0..2], @as(u16, @intCast(offset)), std.builtin.Endian.big);
             leftPos += 2;
 
             rightPos -= vlen;
             @memcpy(buf[rightPos..], item.value);
 
             rightPos -= 1;
-            buf[rightPos] = vlen;
+            buf[rightPos] = @as(u8, @intCast(vlen));
 
             rightPos -= klen;
             @memcpy(buf[rightPos..], item.key);
             rightPos -= 1;
-            buf[rightPos] = klen;
+            buf[rightPos] = @truncate(klen);
         }
 
         if (!_isLeaf) {
             // Write the last child node
             const lastChildNode = self.childNodes.getLast();
             // Write the child page as a fixed size of 8 bytes.
-            std.mem.writeInt(u64, buf[leftPos..(leftPos + 8)], lastChildNode, std.builtin.Endian.big);
+            std.mem.writeInt(u64, buf[leftPos..(leftPos + 8)][0..8], lastChildNode, std.builtin.Endian.big);
         }
     }
 
@@ -476,7 +487,7 @@ pub const Node = struct {
             try aNode.childNodes.appendSlice(bNode.childNodes.items);
         }
 
-        self.writeNodes([_]*Node{aNode, self});
+        self.writeNodes([_]*Node{ aNode, self });
         self.tx.deleteNode(bNode); // recycel the node
     }
 };

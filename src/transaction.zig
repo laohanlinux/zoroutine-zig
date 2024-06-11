@@ -5,7 +5,7 @@ const DB = @import("./db.zig").DB;
 
 pub const TX = struct {
     // reference the transaction node that be written!
-    dirtyNodes: std.HashMap(u64, *Node, {}, 80),
+    dirtyNodes: std.AutoHashMap(u64, *Node),
     pagesToDelete: std.ArrayList(u64),
 
     // new pages allocated during the transaction. They will be released if rollback is called.
@@ -18,7 +18,7 @@ pub const TX = struct {
 
     pub fn init(allocator: std.mem.Allocator, db: *DB, writeable: bool) *Self {
         var self = allocator.create(Self) catch unreachable;
-        self.dirtyNodes = std.HashMap(u64, *Node, {}, 80).init(allocator);
+        self.dirtyNodes = std.AutoHashMap(u64, *Node).init(allocator);
         self.pagesToDelete = std.ArrayList(u64).init(allocator);
         self.allocatedPageNums = std.ArrayList(u64).init(allocator);
         self.write = writeable;
@@ -28,15 +28,17 @@ pub const TX = struct {
     }
 
     pub fn destroy(self: *Self) void {
-        defer self.allocator.destroy(self);
-        defer self.dirtyNodes.deinit();
-        const dirtyNodesItr = self.dirtyNodes.iterator();
-        while (true) {
-            const item = dirtyNodesItr.next() orelse break;
-            item.value_ptr.destroy();
-        }
+        std.log.info("ready to destroy tx: {any}", .{self.pagesToDelete.items.len});
+        defer std.log.info("succeed to destroy tx", .{});
+        // var dirtyNodesItr = self.dirtyNodes.iterator();
+        // while (true) {
+        //     const item = dirtyNodesItr.next() orelse break;
+        //     item.value_ptr.*.destroy();
+        // }
         self.pagesToDelete.deinit();
         self.allocatedPageNums.deinit();
+        self.dirtyNodes.deinit();
+        // self.allocator.destroy(self);
     }
 
     pub fn newNode(self: *Self, items: []*const Item, childNodes: []const u64) *Node {
