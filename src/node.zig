@@ -2,6 +2,8 @@ const std = @import("std");
 const transaction = @import("./transaction.zig");
 const compare = @import("./util.zig").compare;
 
+pub var zeroItems = [_]*Item{};
+
 pub const Item = struct {
     key: []u8,
     value: []u8,
@@ -67,14 +69,15 @@ pub const Node = struct {
         defer std.log.info("after destroy node {}!", .{pid});
         std.log.info("before destroy node {}!", .{pid});
         for (self.items.items) |item| {
-            std.log.info("free item", .{});
+            std.log.info("free item: {s}", .{item.key});
             item.destroy();
         }
         self.items.deinit();
 
-        if (self.tx) |_tx| {
-            std.log.info("to free tx!", .{});
-            _tx.destroy();
+        if (self.tx) |_| {
+            std.log.info("to free tx !", .{});
+            //_tx.destroy();
+            self.tx = null;
         }
         self.childNodes.deinit();
     }
@@ -123,6 +126,7 @@ pub const Node = struct {
     }
 
     pub fn serialize(self: *const Self, buf: []u8) void {
+        defer std.log.info("after serialize node: {}", .{buf.len});
         var leftPos: usize = 0;
         var rightPos: usize = buf.len - 1;
         // Add page header: isLeaf, key-value pairs count, node num
@@ -167,13 +171,13 @@ pub const Node = struct {
             leftPos += 2;
 
             rightPos -= vlen;
-            @memcpy(buf[rightPos..], item.value);
+            @memcpy(buf[rightPos..(rightPos + vlen)], item.value);
 
             rightPos -= 1;
             buf[rightPos] = @as(u8, @intCast(vlen));
 
             rightPos -= klen;
-            @memcpy(buf[rightPos..], item.key);
+            @memcpy(buf[rightPos..(rightPos + klen)], item.key);
             rightPos -= 1;
             buf[rightPos] = @truncate(klen);
         }
@@ -186,52 +190,56 @@ pub const Node = struct {
         }
     }
 
-    pub fn deserialize(self: *const Self, buf: []u8) void {
-        var leftPos = 0;
+    pub fn deserialize(self: *Self, buf: []u8) void {
+        var leftPos: usize = 0;
         // Read header
         const _isLeaf = buf[leftPos] == 1;
 
         leftPos += 1;
-        const itemsCount = std.mem.readInt(u16, buf[leftPos..(leftPos + 2)], std.builtin.Endian.big);
+        const itemsCount = std.mem.readInt(u16, buf[leftPos..(leftPos + 2)][0..2], std.builtin.Endian.big);
         leftPos += 2;
 
         // Read body
         for (0..itemsCount) |_| {
             if (!_isLeaf) { // false
-                const pageNum = std.mem.readInt(u64, buf[leftPos..(leftPos + 8)], std.builtin.Endian.big);
+                const pageNum = std.mem.readInt(u64, buf[leftPos..(leftPos + 8)][0..8], std.builtin.Endian.big);
                 leftPos += 8;
                 // Add child node
                 self.childNodes.append(pageNum) catch unreachable;
             }
 
             // Read offset
-            const offset = std.mem.readInt(u16, buf[leftPos..(leftPos + 2)], std.builtin.Endian.big);
+            var offset = std.mem.readInt(u16, buf[leftPos..(leftPos + 2)][0..2], std.builtin.Endian.big);
             leftPos += 2;
 
             const klen = buf[offset];
             offset += 1;
-            const key = buf[offset..(offset + klen)];
+            //const key = buf[offset..(offset + klen)];
+            const key = self.allocator.?.alloc(u8, klen) catch unreachable;
+            @memcpy(key, buf[offset..(offset + klen)]);
             offset += klen;
 
             const vlen = buf[offset];
             offset += 1;
-            const value = buf[offset..(offset + vlen)];
+            const value = self.allocator.?.alloc(u8, vlen) catch unreachable;
+            @memcpy(value, buf[offset..(offset + vlen)]);
+            //const value = buf[offset..(offset + vlen)];
             offset += vlen;
-            self.items.append(Item.init(key, value)) catch unreachable;
+            self.items.append(Item.init(self.allocator.?, key, value)) catch unreachable;
         }
 
         // TODO why?
         if (!_isLeaf) { // False
             // Read the last child node
-            const pageNum = std.mem.readInt(u64, buf[leftPos..(leftPos + 8)], std.builtin.Endian.big);
+            const pageNum = std.mem.readInt(u64, buf[leftPos..(leftPos + 8)][0..8], std.builtin.Endian.big);
             self.childNodes.append(pageNum) catch unreachable;
         }
     }
 
     /// Returns the size of a key-value-childNode triplet at a given index. If the node is a leaf, then the size
     /// of a key-value pair is returned. It's assumed i <= items.len.
-    fn elementSize(self: *const Self, i: usize) usize {
-        var size = 0;
+    pub fn elementSize(self: *const Self, i: usize) usize {
+        var size: usize = 0;
         size += self.items.items[i].key.len;
         size += self.items.items[i].value.len;
         size += 8; // 8 is the page number size
@@ -240,9 +248,9 @@ pub const Node = struct {
 
     /// Returns the node's size in bytes.
     pub fn nodeSize(self: *const Self) usize {
-        var size = 0;
+        var size: usize = 0;
         size += Self.nodeHeaderSize;
-        for (0..self.items.len) |i| {
+        for (0..self.items.items.len) |i| {
             size += self.elementSize(i);
         }
         // Add last page
@@ -256,30 +264,31 @@ pub const Node = struct {
     /// If the key isn't found, we have 2 options. If exact is true, it means we expect findKey
     /// to find the key, so a falsey answer. If exact is false, then findKey is used to locate where a new key should be
     /// inserted so the position is returned.
-    pub fn findKey(self: *const Self, key: []const u8, exact: bool) !std.meta.Tuple(&.{ ?usize, *Node, std.ArrayList(usize) }) {
-        const ancestoreIndexes = std.ArrayList(usize).init(self.allocator);
-        const find = try self.findKeyHelper(self, key, exact, &ancestoreIndexes);
-        return &.{ find[0], find[1], ancestoreIndexes };
+    pub fn findKey(self: *Self, key: []const u8, exact: bool) !std.meta.Tuple(&.{ ?usize, *Node, std.ArrayList(usize) }) {
+        var ancestoreIndexes = std.ArrayList(usize).init(self.allocator.?);
+        const find = try Self.findKeyHelper(self, key, exact, &ancestoreIndexes);
+        return .{ find[0], find[1], ancestoreIndexes };
     }
 
     // Find a key from node
-    fn findKeyHelper(node: *const Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) !std.meta.Tuple(&.{ ?usize, *Node }) {
+    fn findKeyHelper(node: *Node, key: []const u8, exact: bool, ancestoreIndexes: *std.ArrayList(usize)) !std.meta.Tuple(&.{ ?usize, *Node }) {
         const find = node.findKeyInNode(key);
         const wasFound = find[0];
         const index = find[1];
         if (wasFound) {
-            return &.{ index, node };
+            return .{ index, node };
         }
         // If we reached a leaf node and the key was'nt found, it means it doesn't exist.
         if (node.isLeaf()) {
             if (exact) {
-                return &.{ null, null };
+                return .{ null, undefined };
             }
 
-            return &.{ index, node };
+            return .{ index, node };
         }
 
         // Else keep searching the tree
+        std.log.info("continue find...", .{});
         try ancestoreIndexes.append(index);
         const nextChild = try node.getNode(node.childNodes.items[index]);
         return Self.findKeyHelper(nextChild, key, exact, ancestoreIndexes);
@@ -325,7 +334,7 @@ pub const Node = struct {
         // index after.
         const splitIndex = nodeToSplit.tx.?.db.dal.getSplitIndex(nodeToSplit) orelse return error.Santy;
         const middItem = nodeToSplit.items.items[splitIndex];
-        var newNode: *Node = null;
+        var newNode: *Node = undefined;
         if (nodeToSplit.isLeaf()) {
             const tmpNode = self.tx.?.newNode(nodeToSplit.items.items[splitIndex + 1 ..], &[_]u64{});
             newNode = self.writeNode(tmpNode);
@@ -337,9 +346,10 @@ pub const Node = struct {
             try nodeToSplit.childNodes.resize(splitIndex + 1);
         }
 
-        _ = self.addItem(middItem, nodeToSplit);
+        _ = self.addItem(middItem, nodeToSplitIndex);
         try self.childNodes.insert(nodeToSplitIndex + 1, newNode.pageNum);
-        self.writeNodes([_]*Node{ self, nodeToSplit });
+        var nodes = [_]*Node{ self, nodeToSplit };
+        self.writeNodes(nodes[0..]);
     }
 
     // rebalanceRemove rebalances the tree after a remove operation. This can be either by rotating to the right, to the

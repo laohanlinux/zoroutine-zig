@@ -45,16 +45,18 @@ pub const Dal = struct {
 
     const Self = @This();
     pub fn init(allocator: std.mem.Allocator, path: []const u8, options: Options) !*Self {
-        defer std.log.info("has init db!", .{});
+        defer std.log.info("has init db, option: {any}!", .{options});
         var dal = try allocator.create(Self);
         dal.pageSize = options.pageSize;
-        std.debug.assert(dal.*.pageSize > 0);
+        dal.minFillPercent = options.minFillPercent;
+        dal.maxFillPercent = options.maxFillPercent;
+
         dal.allocator = allocator;
         std.debug.assert(dal.*.pageSize > 0);
         const stat = std.fs.cwd().statFile(path) catch |err| {
             switch (err) {
                 std.fs.File.OpenError.FileNotFound => {
-                    dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .exclusive = true });
+                    dal.file = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{ .read = true, .exclusive = true });
                     dal.meta = try allocator.create(Meta);
                     dal.freelist = FreeList.init(allocator);
                     dal.meta.freeListPage = dal.freelist.getNextPage();
@@ -85,6 +87,8 @@ pub const Dal = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        defer std.log.debug("after dal destroy!", .{});
+        std.log.debug("ready dal destroy!", .{});
         self.file.close();
         self.meta.destroy(self.allocator);
         self.freelist.destroy(self.allocator);
@@ -100,7 +104,7 @@ pub const Dal = struct {
             size += node.elementSize(i);
             // if we have a big enough page size (more than minimum), and didn't reach the last node, which means we can
             // spare an element
-            if (@as(f32, @intCast(size)) > self.maxThreshold() and i < node.items.items.len - 1) {
+            if (@as(f32, @floatFromInt(size)) > self.maxThreshold() and i < node.items.items.len - 1) {
                 return i + 1; // NOTE: return the next index
             }
         }
@@ -110,11 +114,12 @@ pub const Dal = struct {
 
     // For split
     pub fn maxThreshold(self: *const Self) f32 {
-        return self.maxFillPercent * @as(f32, @intCast(self.pageSize));
+        return self.maxFillPercent * @as(f32, @floatFromInt(self.pageSize));
     }
 
     pub fn isOverPopulated(self: *const Self, node: *const Node) bool {
-        return @as(f32, @intCast(node.nodeSize())) > self.maxThreshold();
+        //std.log.info("nodeSize: {}, threshold: {}", .{ node.nodeSize(), self.maxThreshold() });
+        return @as(f32, @floatFromInt(node.nodeSize())) > self.maxThreshold();
     }
 
     // For merge
@@ -149,8 +154,7 @@ pub const Dal = struct {
     // disk -[copy]-> page -[ref(key,value)]-> node
     pub fn getNode(self: *Self, pageNum: u64) !*Node {
         const page = try self.readPage(pageNum);
-        defer self.allocator.destroy(page);
-
+        defer page.deinit(self.allocator);
         var node = Node.init(self.allocator);
         node.deserialize(page.data);
         node.*.pageNum = pageNum;

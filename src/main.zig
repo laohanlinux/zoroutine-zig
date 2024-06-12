@@ -2,6 +2,8 @@ const std = @import("std");
 const dal = @import("./dal.zig");
 const Dal = dal.Dal;
 const collection = @import("./collection.zig");
+const tx = @import("./transaction.zig");
+const db = @import("./db.zig");
 
 pub fn main() !void {
     var gpt = std.heap.GeneralPurposeAllocator(.{}){};
@@ -11,15 +13,25 @@ pub fn main() !void {
     const path = "libra.db";
     const options = dal.Options{
         .pageSize = std.mem.page_size,
-        .minFillPercent = 0.0125,
-        .maxFillPercent = 0.025,
+        .minFillPercent = 0.5,
+        .maxFillPercent = 1.0,
     };
-    const db = try Dal.init(allocator, path, options);
-    defer db.deinit();
-    std.log.info("db page's size: {}\n", .{db.pageSize});
+    const initDal = try Dal.init(allocator, path, options);
+    const ldb = db.DB.init(initDal);
+    defer ldb.destroy();
+    {
+        var trx = tx.TX.init(ldb, true);
+        defer trx.commit() catch unreachable;
+        var c = trx.createCollection("collection1") catch unreachable;
+        defer c.deinit();
+    }
 
-    var c = collection.Collection.init(allocator, "collection1", db.meta.root);
-    defer c.deinit();
+    {
+        var trx = tx.TX.init(ldb, true);
+        defer trx.commit();
+        var c = trx.getCollection("collection1") catch unreachable;
+        defer c.deinit();
+    }
 }
 
 test "simple test" {

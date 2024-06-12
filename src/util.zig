@@ -32,8 +32,14 @@ pub fn isGte(left: []const u8, right: []const u8) bool {
 }
 
 pub fn isEq(left: []const u8, right: []const u8) bool {
-    switch (compare(.{}, left, right)) {
+    switch (compare({}, left, right)) {
         .eq => return true,
         else => return false,
     }
+}
+
+pub fn cpBytes(allocator: std.mem.Allocator, s: []const u8) []u8 {
+    const bytes = allocator.alloc(u8, s.len) catch unreachable;
+    @memcpy(bytes, s);
+    return bytes;
 }

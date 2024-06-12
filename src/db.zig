@@ -6,13 +6,22 @@ const Dal = @import("./dal.zig").Dal;
 
 pub const DB = struct {
     // Allows only one writer at a time
-    rwLock: *std.Thread.RwLock,
+    rwLock: std.Thread.RwLock,
     dal: *Dal,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
+    pub fn init(dal: *Dal) *DB {
+        var ldb = dal.allocator.create(Self) catch unreachable;
+        ldb.rwLock = std.Thread.RwLock{};
+        ldb.dal = dal;
+        ldb.allocator = dal.allocator;
+        return ldb;
+    }
+
     pub fn destroy(self: *Self) void {
+        self.dal.deinit();
         self.allocator.destroy(self);
     }
 
