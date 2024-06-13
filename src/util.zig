@@ -43,3 +43,15 @@ pub fn cpBytes(allocator: std.mem.Allocator, s: []const u8) []u8 {
     @memcpy(bytes, s);
     return bytes;
 }
+
+pub fn stackStr(comptime str: []const u8) []u8 {
+    var newString: [str.len]u8 = undefined;
+    @memcpy(newString[0..str.len], str[0..str.len]);
+    return newString;
+}
+
+pub fn stackStrN(comptime n: usize) [n]u8 {
+    const newString: [n]u8 = undefined;
+    @memset(newString, 0);
+    return newString;
+}

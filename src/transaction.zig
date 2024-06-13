@@ -128,37 +128,35 @@ pub const TX = struct {
         // Write the freelist to the db
         const page = try self.db.dal.writeFreelist();
         page.deinit(self.allocator);
+
         // TODO why not update meta node...
         defer self.allocator.destroy(self);
         self.db.rwLock.unlock();
     }
 
     // Get the root collection
-    pub fn getCollection(self: *Self, name: []const u8) !*Collection {
-        const rootCollection = self._getRootCollection();
+    pub fn getCollection(self: *Self, name: []const u8) !Collection {
+        var rootCollection = self.getRootCollection();
         defer rootCollection.deinit();
         var item = try rootCollection.find(name);
         defer item.destroy();
-        var _collection = Collection.initEmpty(self.allocator);
+        var _collection = Collection.createEmpty(self.allocator);
         _collection.deseriliaze(item);
-        _collection.*.tx = self;
-
+        _collection.tx = self;
         return _collection;
     }
 
-    pub fn createCollection(self: *Self, name: []const u8) !*Collection {
+    pub fn createCollection(self: *Self, name: []const u8) !Collection {
         if (!self.write) {
             return error.WriteInsideReadTx;
         }
-
         // allocate a new page for the collection
         var newCollectionPage = try self.db.dal.writeNode(Node.init(self.allocator));
         defer newCollectionPage.destroy();
-        var newCollection = Collection.initEmpty(self.allocator);
+        var newCollection = Collection.init(self.allocator);
         newCollection.fillName(name);
         newCollection.root = newCollectionPage.*.pageNum;
-        newCollection = try self._createCollection(newCollection);
-
+        try self._createCollection(&newCollection);
         return newCollection;
     }
 
@@ -166,26 +164,24 @@ pub const TX = struct {
         if (!self.write) {
             return error.WriteInsideReadTx;
         }
-
-        const rootCollection = self._getRootCollection(name);
+        const rootCollection = self.getRootCollection(name);
         try rootCollection.remove(name);
     }
 
-    fn _createCollection(self: *Self, c: *Collection) !*Collection {
+    fn _createCollection(self: *Self, c: *Collection) !void {
         c.tx = self;
         const cBytes = c.serialize();
         defer cBytes.destroy();
         // every collection are locate at Root Collection low
-        const rootCollection = self._getRootCollection();
+        var rootCollection = self.getRootCollection();
         try rootCollection.put(c.name.?, cBytes.value);
-        defer rootCollection.deinit();
-        return c;
+        defer rootCollection.destroy();
     }
 
-    fn _getRootCollection(self: *Self) *Collection {
-        const rootCollection = Collection.initEmpty(self.allocator);
-        rootCollection.*.root = self.db.dal.meta.root;
-        rootCollection.*.tx = self;
+    fn getRootCollection(self: *Self) Collection {
+        var rootCollection = Collection.init(self.allocator);
+        rootCollection.root = self.db.dal.meta.root;
+        rootCollection.tx = self;
         return rootCollection;
     }
 };

@@ -23,15 +23,18 @@ pub fn main() !void {
         var trx = tx.TX.init(ldb, true);
         defer trx.commit() catch unreachable;
         var c = trx.createCollection("collection1") catch unreachable;
-        defer c.deinit();
+        defer c.destroy();
     }
-
-    {
-        var trx = tx.TX.init(ldb, true);
-        defer trx.commit();
-        var c = trx.getCollection("collection1") catch unreachable;
-        defer c.deinit();
-    }
+    //
+    //    {
+    //       std.log.info("Start new tx", .{});
+    //   var trx = tx.TX.init(ldb, true);
+    //     defer trx.commit() catch unreachable;
+    //   var c = trx.getCollection("collection1") catch unreachable;
+    //   defer c.deinit();
+    //   const item = try c.find("abc");
+    // std.log.info("item: {s}", .{item.key});
+    // }
 }
 
 test "simple test" {

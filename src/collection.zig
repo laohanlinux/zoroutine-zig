@@ -6,44 +6,25 @@ const emptyItems = @import("./node.zig").zeroItems;
 const util = @import("./util.zig");
 
 pub const Collection = struct {
-    name: ?[]u8,
-    root: u64,
-    counter: u64,
+    name: ?[]u8 = null,
+    root: u64 = 0,
+    counter: u64 = 0,
     // associated transaction
-    tx: ?*Tx,
+    tx: ?*Tx = null,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub const collectionSize: usize = 16;
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, root: u64) *Collection {
-        var c = allocator.create(Self) catch unreachable;
-        c.allocator = allocator;
-        c.name.? = c.allocator.alloc(u8, name.len) catch unreachable;
-        @memcpy(c.name.?, name);
-        c.root = root;
-        return c;
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{ .allocator = allocator };
     }
 
-    pub fn initEmpty(allocator: std.mem.Allocator) *Collection {
-        var c = allocator.create(Self) catch unreachable;
-        c.allocator = allocator;
-        c.name = null;
-        c.root = 0;
-        c.counter = 0;
-        c.tx = null;
-        return c;
-    }
-
-    pub fn deinit(self: *Self) void {
-        defer std.log.debug("after collection destroy!", .{});
-        std.log.debug("ready collection destroy {any}!", .{self.name == null});
+    pub fn destroy(self: *const Self) void {
         if (self.name) |name| {
             self.allocator.free(name);
         }
-        self.tx = null;
-        self.allocator.destroy(self);
     }
 
     pub fn id(self: *const Self) u64 {
