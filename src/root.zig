@@ -3,6 +3,6 @@
 //! start with main.zig instead.
 const std = @import("std");
 
-const Channel = @import("channel.zig").Channel;
-const Mutex = @import("thread.zig").Mutex;
-const RxMutex = @import("thread.zig").RxMutex;
+pub const Channel = @import("channel.zig").Channel;
+pub const Mutex = @import("thread.zig").Mutex;
+pub const RxMutex = @import("thread.zig").RxMutex;
